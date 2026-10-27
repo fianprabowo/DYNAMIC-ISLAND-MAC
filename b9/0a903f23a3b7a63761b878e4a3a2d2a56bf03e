@@ -1,0 +1,25 @@
+.gitignore
+  s_8d4b63dc56ae38::t_a94ac97bc7d06c 70-72
+README.md
+  s_8d4b63dc56ae38::t_c98541c78e1b69 38-43
+Signing.xcconfig
+  s_8d4b63dc56ae38::t_a94ac97bc7d06c 1-11
+DynamicIsland.xcodeproj/project.pbxproj
+  s_8d4b63dc56ae38::t_a94ac97bc7d06c 10,35,254,294
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "b90a903f23a3b7a63761b878e4a3a2d2a56bf03e",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
