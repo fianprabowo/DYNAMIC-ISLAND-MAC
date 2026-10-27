@@ -1,0 +1,21 @@
+DynamicIsland.xcodeproj/project.pbxproj
+  s_8d4b63dc56ae38::t_beded4158f51ab 1-352
+README.md
+  s_8d4b63dc56ae38::t_beded4158f51ab 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "6e6a42bf1ef959cd31ad93af2b4b7a2e7d5fecfd",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
