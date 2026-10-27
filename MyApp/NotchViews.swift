@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 
 /// The island attached to the MacBook notch, modeled after NotchNook: notch-sized while idle,
-/// growing wings for live activity, and opening into a wide panel with Nook / System tabs.
+/// growing wings for live activity, dropping down with other apps' notifications, and opening
+/// into a wide panel with Nook / Alerts / System tabs.
 struct NotchIslandView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var claudeUsage: ClaudeUsageMonitor
@@ -20,10 +21,14 @@ struct NotchIslandView: View {
             .onChange(of: hasActivity, initial: true) { _, active in
                 layout.setShowsWings(active)
             }
+            .onChange(of: notificationManager.banner?.id) {
+                layout.setShowsBanner(notificationManager.banner != nil)
+            }
     }
 
     private var island: some View {
-        let size = layout.isExpanded ? IslandLayout.notchExpandedSize : layout.notchCollapsedSize
+        let size = layout.isExpanded ? IslandLayout.notchExpandedSize
+            : layout.showsBanner ? layout.notchBannerSize : layout.notchCollapsedSize
 
         return ZStack(alignment: .top) {
             if layout.isExpanded {
@@ -35,6 +40,12 @@ struct NotchIslandView: View {
                         removal: .opacity.combined(with: .scale(scale: 0.9, anchor: .top))
                             .animation(.easeOut(duration: 0.15))
                     ))
+            } else if layout.showsBanner, let banner = notificationManager.banner {
+                NotchBannerView(notification: banner)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeIn(duration: 0.2).delay(0.08)),
+                        removal: .opacity.animation(.easeOut(duration: 0.12))
+                    ))
             } else {
                 collapsedBar
                     .transition(.opacity.animation(.easeInOut(duration: 0.2)))
@@ -43,8 +54,12 @@ struct NotchIslandView: View {
         .frame(width: size.width, height: size.height, alignment: .top)
         .background(Color.black)
         // Only the bottom corners are rounded, so it looks like the notch itself grew.
-        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: layout.isExpanded ? 24 : 10, bottomTrailingRadius: layout.isExpanded ? 24 : 10))
+        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: cornerRadius, bottomTrailingRadius: cornerRadius))
         .foregroundColor(.white)
+    }
+
+    private var cornerRadius: CGFloat {
+        layout.isExpanded ? 24 : layout.showsBanner ? 20 : 10
     }
 
     private var hasActivity: Bool {
@@ -99,12 +114,72 @@ struct NotchIslandView: View {
     }
 }
 
+// MARK: - Notification Banner
+/// Another app's notification below the notch. Clicking it opens that app.
+private struct NotchBannerView: View {
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var notificationManager: NotificationManager
+    let notification: AppNotification
+
+    private var appURL: URL? {
+        notification.appBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+    }
+
+    private var appName: String {
+        notification.appName ?? ""
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if let appURL {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
+                        .resizable()
+                } else {
+                    Image(systemName: notification.icon)
+                        .font(.system(size: 20))
+                }
+            }
+            .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 1) {
+                if !appName.isEmpty && appName != notification.title {
+                    Text(appName)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.gray)
+                }
+                Text(notification.title)
+                    .font(.system(size: 12, weight: .semibold))
+                if !notification.body.isEmpty {
+                    Text(notification.body)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.75))
+                }
+            }
+            .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        // The top of the island sits behind the physical notch.
+        .padding(.top, layout.notchSize.height + 4)
+        .padding(.bottom, 8)
+        .contentShape(Rectangle())
+        .onHover { notificationManager.holdBanner($0) }
+        .onTapGesture {
+            if let appURL {
+                NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+            }
+            notificationManager.dismissBanner()
+        }
+    }
+}
+
 // MARK: - Expanded Panel
 private struct NotchExpandedView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var systemMonitor: SystemMonitor
     @EnvironmentObject var temperatureMonitor: TemperatureMonitor
-    @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var themeManager: ThemeManager
 
     var body: some View {
@@ -125,15 +200,15 @@ private struct NotchExpandedView: View {
                         ClaudeUsageWidget()
                             .frame(width: 112, alignment: .leading)
                     }
+                case .alerts:
+                    AlertsView()
                 case .system:
                     HStack(alignment: .top, spacing: 20) {
                         StatsTabView(systemMonitor: systemMonitor, themeManager: themeManager)
                             .frame(width: 170)
                         TemperatureTabView(temperatureMonitor: temperatureMonitor, themeManager: themeManager)
                             .frame(width: 170)
-                        ScrollView {
-                            NotificationsTabView(notificationManager: notificationManager, themeManager: themeManager)
-                        }
+                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -190,6 +265,118 @@ private struct NotchExpandedView: View {
             .fill(Color.white.opacity(0.12))
             .frame(width: 1)
             .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Alerts
+/// Every notification: the app's own and other apps'. Each can be removed, or all at once.
+private struct AlertsView: View {
+    @EnvironmentObject var notificationManager: NotificationManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(notificationManager.notifications.isEmpty ? "No notifications" : "\(notificationManager.notifications.count) notifications")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                Spacer()
+                if !notificationManager.notifications.isEmpty {
+                    Button("Clear All") {
+                        withAnimation { notificationManager.clearAll() }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                }
+            }
+
+            if notificationManager.notifications.isEmpty {
+                Image(systemName: "bell.slash")
+                    .font(.system(size: 22))
+                    .foregroundColor(.gray.opacity(0.6))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(notificationManager.notifications) { notification in
+                            AlertRow(notification: notification)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+        }
+        .onAppear { notificationManager.markAllAsRead() }
+        // New notifications arriving while the tab is open count as seen.
+        .onChange(of: notificationManager.unreadCount) {
+            notificationManager.markAllAsRead()
+        }
+    }
+}
+
+private struct AlertRow: View {
+    @EnvironmentObject var notificationManager: NotificationManager
+    @EnvironmentObject var themeManager: ThemeManager
+    let notification: AppNotification
+    @State private var isHovered = false
+
+    private var appURL: URL? {
+        notification.appBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if let appURL {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
+                        .resizable()
+                } else {
+                    Image(systemName: notification.icon)
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(themeManager.currentTheme.accentColor))
+                }
+            }
+            .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(notification.title)
+                    .font(.system(size: 11, weight: .semibold))
+                if !notification.body.isEmpty {
+                    Text(notification.body)
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+            }
+            .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            Text(notification.date, format: .dateTime.hour().minute())
+                .font(.system(size: 10))
+                .foregroundColor(.gray)
+
+            Button {
+                withAnimation { notificationManager.dismiss(id: notification.id) }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
+            }
+            .buttonStyle(.plain)
+            .help("Remove")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(isHovered ? 0.12 : 0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .onHover { isHovered = $0 }
+        // Clicking a notification from another app opens that app.
+        .onTapGesture {
+            if let appURL {
+                NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+            }
+        }
     }
 }
 

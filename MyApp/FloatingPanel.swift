@@ -5,11 +5,13 @@ import SwiftUI
 /// Tabs of the expanded notch panel, modeled after NotchNook.
 enum NotchTab: String, CaseIterable {
     case nook = "Nook"
+    case alerts = "Alerts"
     case system = "System"
 
     var icon: String {
         switch self {
         case .nook: return "sparkles"
+        case .alerts: return "bell.fill"
         case .system: return "chart.bar.fill"
         }
     }
@@ -33,6 +35,8 @@ class IslandLayout: ObservableObject {
     /// Whether the collapsed island shows its wings (music playing / unread notifications).
     /// When idle it is exactly as wide as the physical notch, like the iPhone's Dynamic Island.
     @Published private(set) var showsWings = false
+    /// Whether the collapsed island shows another app's notification below the notch.
+    @Published private(set) var showsBanner = false
     @Published private(set) var notchSize: CGSize
 
     /// Width of the black "wings" shown beside the physical notch while collapsed.
@@ -62,8 +66,19 @@ class IslandLayout: ObservableObject {
     /// Transparent room around the open island so the opening spring's overshoot isn't clipped.
     static let overshootMargin: CGFloat = 16
 
+    var notchBannerSize: CGSize {
+        CGSize(width: 380, height: notchSize.height + 60)
+    }
+
     var notchWindowSize: CGSize {
-        isExpanded ? Self.notchExpandedWindowSize : notchCollapsedSize
+        if isExpanded {
+            return Self.notchExpandedWindowSize
+        }
+        return showsBanner ? notchBannerWindowSize : notchCollapsedSize
+    }
+
+    private var notchBannerWindowSize: CGSize {
+        CGSize(width: notchBannerSize.width + Self.overshootMargin * 2, height: notchBannerSize.height + Self.overshootMargin)
     }
 
     static var notchExpandedWindowSize: CGSize {
@@ -103,6 +118,19 @@ class IslandLayout: ObservableObject {
         } else {
             withAnimation(Self.collapseAnimation) {
                 showsWings = false
+            }
+        }
+    }
+
+    func setShowsBanner(_ show: Bool) {
+        guard show != showsBanner else { return }
+        if show {
+            grow(to: notchBannerWindowSize) {
+                self.showsBanner = true
+            }
+        } else {
+            withAnimation(Self.collapseAnimation) {
+                showsBanner = false
             }
         }
     }
@@ -201,7 +229,7 @@ class FloatingPanel: NSPanel {
             .removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.fitFloatingContent() } }
             .store(in: &cancellables)
-        Publishers.CombineLatest(layout.$isExpanded, layout.$showsWings)
+        Publishers.CombineLatest3(layout.$isExpanded, layout.$showsWings, layout.$showsBanner)
             .dropFirst()
             // @Published emits before the stored value changes, so read the new state on the next pass.
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
@@ -249,11 +277,12 @@ class FloatingPanel: NSPanel {
 
     private func pointerEntered() {
         hoverCloseWorkItem?.cancel()
-        guard layout.isPinnedToNotch, layout.openOnHover, !layout.isExpanded else { return }
+        // Pointing at a notification banner (to read it) shouldn't cover it with the open panel.
+        guard layout.isPinnedToNotch, layout.openOnHover, !layout.isExpanded, !layout.showsBanner else { return }
 
         // A short delay so sweeping past the notch on the way to the menu bar doesn't open it.
         let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.layout.isExpanded, self.notchHoverRect.contains(NSEvent.mouseLocation) else { return }
+            guard let self, !self.layout.isExpanded, !self.layout.showsBanner, self.notchHoverRect.contains(NSEvent.mouseLocation) else { return }
             self.layout.expand()
         }
         hoverOpenWorkItem = work

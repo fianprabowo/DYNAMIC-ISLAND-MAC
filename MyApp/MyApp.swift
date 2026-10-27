@@ -26,6 +26,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let islandLayout = IslandLayout()
     let calendarManager = CalendarManager()
     let claudeUsageMonitor = ClaudeUsageMonitor()
+    let systemNotificationMonitor = SystemNotificationMonitor(notificationManager: .shared)
+    let dockBadgeWatcher = DockBadgeWatcher(notificationManager: .shared)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -450,8 +452,14 @@ struct NotificationsTabView: View {
                 ForEach(notificationManager.notifications.prefix(3)) { notification in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Image(systemName: notification.icon)
-                                .foregroundColor(Color(themeManager.currentTheme.accentColor))
+                            if let url = notification.appBundleID.flatMap({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }) {
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                                    .resizable()
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Image(systemName: notification.icon)
+                                    .foregroundColor(Color(themeManager.currentTheme.accentColor))
+                            }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(notification.title)
                                     .font(.system(size: 10, weight: .semibold))
