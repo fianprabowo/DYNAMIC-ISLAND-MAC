@@ -1,0 +1,27 @@
+MyApp/FloatingPanel.swift
+  s_8d4b63dc56ae38::t_7973351c7477a2 81
+  s_8d4b63dc56ae38::t_d55bd56e801bca 28-29,90,230,265,271
+MyApp/NotchViews.swift
+  s_8d4b63dc56ae38::t_d55bd56e801bca 173-177,197-214
+  s_8d4b63dc56ae38::t_7973351c7477a2 5
+README.md
+  s_8d4b63dc56ae38::t_dbe77f381165ec 11
+DynamicIsland.xcodeproj/project.pbxproj
+  s_8d4b63dc56ae38::t_9a9e3cbf0a73a5 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "7c784cfdba800883e472a20cf8ace89c05cd8a28",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
