@@ -2,14 +2,13 @@ import SwiftUI
 import AppKit
 
 /// The island attached to the MacBook notch, modeled after NotchNook: notch-sized while idle,
-/// growing wings for live activity, and opening into a wide panel with Nook / Tray / Stats tabs.
+/// growing wings for live activity, and opening into a wide panel with Nook / System tabs.
 struct NotchIslandView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var claudeUsage: ClaudeUsageMonitor
     @EnvironmentObject var spotifyManager: SpotifyManager
     @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var themeManager: ThemeManager
-    @EnvironmentObject var trayManager: TrayManager
 
     var body: some View {
         // The island is an overlay on a flexible clear base, so its size never becomes the hosting
@@ -97,15 +96,6 @@ struct NotchIslandView: View {
         .frame(width: layout.notchSize.width + IslandLayout.notchWing * 2, height: layout.notchSize.height)
         .opacity(layout.showsWings ? 1 : 0)
         .overlay(WindowDragArea(onClick: { layout.expand() }))
-        // Dragging a file onto the notch opens it on the Tray.
-        .dropDestination(for: URL.self) { urls, _ in
-            trayManager.add(urls)
-            return true
-        } isTargeted: { targeted in
-            if targeted {
-                layout.expand(to: .tray)
-            }
-        }
     }
 }
 
@@ -116,7 +106,6 @@ private struct NotchExpandedView: View {
     @EnvironmentObject var temperatureMonitor: TemperatureMonitor
     @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var themeManager: ThemeManager
-    @EnvironmentObject var trayManager: TrayManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -136,8 +125,6 @@ private struct NotchExpandedView: View {
                         ClaudeUsageWidget()
                             .frame(width: 112, alignment: .leading)
                     }
-                case .tray:
-                    TrayView()
                 case .system:
                     HStack(alignment: .top, spacing: 20) {
                         StatsTabView(systemMonitor: systemMonitor, themeManager: themeManager)
@@ -154,15 +141,6 @@ private struct NotchExpandedView: View {
             .padding(.top, 6)
             .padding(.bottom, 14)
             .frame(maxHeight: .infinity)
-        }
-        // Files dragged over any tab switch to the Tray.
-        .dropDestination(for: URL.self) { urls, _ in
-            trayManager.add(urls)
-            return true
-        } isTargeted: { targeted in
-            if targeted {
-                layout.selectedTab = .tray
-            }
         }
     }
 
@@ -192,8 +170,11 @@ private struct NotchExpandedView: View {
 
             Spacer(minLength: layout.notchSize.width + 20)
 
-            SettingsMenu()
-                .padding(.trailing, 16)
+            HStack(spacing: 12) {
+                PinButton()
+                SettingsMenu()
+            }
+            .padding(.trailing, 16)
         }
         // Without hover-to-open, clicking empty space in the bar (under the notch) closes it.
         .contentShape(Rectangle())
@@ -213,6 +194,24 @@ private struct NotchExpandedView: View {
 }
 
 // MARK: - Settings
+/// Keeps the notch open while the pointer is elsewhere, until unpinned or closed.
+private struct PinButton: View {
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var themeManager: ThemeManager
+
+    var body: some View {
+        Button(action: { layout.staysOpen.toggle() }) {
+            Image(systemName: layout.staysOpen ? "pin.fill" : "pin")
+                .font(.system(size: 12))
+                .rotationEffect(.degrees(layout.staysOpen ? 0 : 45))
+                .foregroundColor(layout.staysOpen ? Color(themeManager.currentTheme.accentColor) : .gray)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(layout.staysOpen ? "Unpin" : "Keep Open")
+    }
+}
+
 private struct SettingsMenu: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var themeManager: ThemeManager
@@ -612,123 +611,5 @@ private struct ClaudeWorkingIcon: View {
     var body: some View {
         PulsingSymbol(systemName: "sparkle", color: claudeOrangeNS, pointSize: 13)
             .frame(width: 20, height: 20)
-    }
-}
-
-// MARK: - Tray
-private struct TrayView: View {
-    @EnvironmentObject var trayManager: TrayManager
-    @EnvironmentObject var themeManager: ThemeManager
-
-    @State private var isShelfTargeted = false
-    @State private var isAirDropTargeted = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            shelf
-            airDrop
-                .frame(width: 110)
-        }
-    }
-
-    private var accent: Color {
-        Color(themeManager.currentTheme.accentColor)
-    }
-
-    private var shelf: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-                .foregroundColor(isShelfTargeted ? accent : Color.white.opacity(0.2))
-
-            if trayManager.items.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 20))
-                    Text("Drop files here")
-                        .font(.system(size: 11))
-                }
-                .foregroundColor(.gray)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(trayManager.items, id: \.self) { url in
-                            TrayItemView(url: url)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                }
-            }
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            trayManager.add(urls)
-            return true
-        } isTargeted: { isShelfTargeted = $0 }
-    }
-
-    /// Drop files here to AirDrop them; click to AirDrop everything on the tray.
-    private var airDrop: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "dot.radiowaves.up.forward")
-                .font(.system(size: 22))
-            Text("AirDrop")
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundColor(isAirDropTargeted ? .white : .gray)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 14).fill(isAirDropTargeted ? accent.opacity(0.35) : Color.white.opacity(0.08)))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if !trayManager.items.isEmpty {
-                trayManager.sendViaAirDrop(trayManager.items)
-            }
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            trayManager.sendViaAirDrop(urls)
-            return true
-        } isTargeted: { isAirDropTargeted = $0 }
-    }
-}
-
-private struct TrayItemView: View {
-    let url: URL
-    @EnvironmentObject var trayManager: TrayManager
-    @State private var isHovering = false
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
-                .resizable()
-                .frame(width: 40, height: 40)
-            Text(url.lastPathComponent)
-                .font(.system(size: 9))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(width: 64)
-        }
-        .overlay(alignment: .topTrailing) {
-            if isHovering {
-                Button(action: { trayManager.remove(url) }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(.gray)
-                }
-                .buttonStyle(.plain)
-                .offset(x: 2, y: -4)
-            }
-        }
-        .onHover { isHovering = $0 }
-        // Drag out into Finder or any app; the original file stays where it is.
-        .onDrag { NSItemProvider(contentsOf: url) ?? NSItemProvider() }
-        .onTapGesture(count: 2) {
-            NSWorkspace.shared.open(url)
-        }
-        .contextMenu {
-            Button("Open") { NSWorkspace.shared.open(url) }
-            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            Divider()
-            Button("Remove from Tray") { trayManager.remove(url) }
-            Button("Clear Tray") { trayManager.clear() }
-        }
     }
 }

@@ -8,9 +8,8 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
   - album art and equalizer bars while Spotify or Music plays;
   - a pulsing Claude icon while Claude Code is working;
   - a badge for unread notifications.
-- **Expanded notch.** Hover over or click the notch to open it. It has three tabs:
+- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has two tabs:
   - **Nook:** now playing with controls, a calendar week strip with events, and Claude usage (plan limits left plus tokens today).
-  - **Tray:** drop files on the notch to keep them at hand.
   - **System:** battery, CPU, memory, network, temperatures and notifications.
 - **Floating mode.** Turn off *Pin to Notch* in the menu bar icon's menu to let the island float freely.
 

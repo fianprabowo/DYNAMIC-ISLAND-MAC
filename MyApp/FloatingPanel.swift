@@ -5,13 +5,11 @@ import SwiftUI
 /// Tabs of the expanded notch panel, modeled after NotchNook.
 enum NotchTab: String, CaseIterable {
     case nook = "Nook"
-    case tray = "Tray"
     case system = "System"
 
     var icon: String {
         switch self {
         case .nook: return "sparkles"
-        case .tray: return "tray.fill"
         case .system: return "chart.bar.fill"
         }
     }
@@ -27,6 +25,8 @@ class IslandLayout: ObservableObject {
         didSet { UserDefaults.standard.set(openOnHover, forKey: Self.openOnHoverKey) }
     }
     @Published var isExpanded = false
+    /// Pinned open: the open notch doesn't close when the pointer leaves it or on a click elsewhere.
+    @Published var staysOpen = false
     @Published var selectedTab: NotchTab = .nook
     /// Size of the floating island as laid out by SwiftUI; the floating window follows it.
     @Published var floatingContentSize: CGSize = .zero
@@ -78,10 +78,7 @@ class IslandLayout: ObservableObject {
         }
     }
 
-    func expand(to tab: NotchTab? = nil) {
-        if let tab {
-            selectedTab = tab
-        }
+    func expand() {
         guard !isExpanded else { return }
         grow(to: Self.notchExpandedWindowSize) {
             self.isExpanded = true
@@ -90,6 +87,7 @@ class IslandLayout: ObservableObject {
 
     func collapse() {
         guard isExpanded else { return }
+        staysOpen = false
         withAnimation(Self.collapseAnimation) {
             isExpanded = false
         }
@@ -229,7 +227,7 @@ class FloatingPanel: NSPanel {
     override func resignKey() {
         super.resignKey()
         // Clicking anywhere else closes the notch island, like the real Dynamic Island.
-        if layout.isPinnedToNotch {
+        if layout.isPinnedToNotch && !layout.staysOpen {
             layout.collapse()
         }
     }
@@ -264,13 +262,13 @@ class FloatingPanel: NSPanel {
 
     private func pointerExited() {
         hoverOpenWorkItem?.cancel()
-        guard layout.isPinnedToNotch, layout.openOnHover, layout.isExpanded else { return }
+        guard layout.isPinnedToNotch, layout.openOnHover, layout.isExpanded, !layout.staysOpen else { return }
         scheduleHoverClose()
     }
 
     private func scheduleHoverClose() {
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.layout.isExpanded else { return }
+            guard let self, self.layout.isExpanded, !self.layout.staysOpen else { return }
             // A menu (like the gear menu) is open and tracking the mouse: check again once it closes.
             if RunLoop.current.currentMode == .eventTracking {
                 self.scheduleHoverClose()

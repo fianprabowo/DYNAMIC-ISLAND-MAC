@@ -25,7 +25,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let mediaControlManager = MediaControlManager()
     let islandLayout = IslandLayout()
     let calendarManager = CalendarManager()
-    let trayManager = TrayManager()
     let claudeUsageMonitor = ClaudeUsageMonitor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -69,7 +68,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(mediaControlManager)
                     .environmentObject(islandLayout)
                     .environmentObject(calendarManager)
-                    .environmentObject(trayManager)
                     .environmentObject(claudeUsageMonitor)
             )
         )
@@ -534,6 +532,5 @@ struct SettingsView: View {
         .environmentObject(MediaControlManager())
         .environmentObject(IslandLayout())
         .environmentObject(CalendarManager())
-        .environmentObject(TrayManager())
         .environmentObject(ClaudeUsageMonitor())
 }
