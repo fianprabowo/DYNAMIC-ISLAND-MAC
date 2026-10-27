@@ -22,7 +22,7 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
 
 ## Build and run
 
-Open `Untitled Project.xcodeproj` in Xcode and run the `MyApp` scheme. You can also build it from the command line:
+Open `DynamicIsland.xcodeproj` in Xcode and run the `MyApp` scheme. You can also build it from the command line:
 
 ```sh
 xcodebuild -scheme MyApp -configuration Release -derivedDataPath build build
