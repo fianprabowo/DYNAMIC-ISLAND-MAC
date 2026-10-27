@@ -1,0 +1,59 @@
+README.md
+  s_8d4b63dc56ae38::t_36ceac36a3fa12 2-57
+.gitignore
+  s_8d4b63dc56ae38::t_ee5ee06c794d5d 63-69
+MyApp/CalendarManager.swift
+  s_8d4b63dc56ae38::t_d598cbffc0024b 1-106
+MyApp/ClaudeUsageMonitor.swift
+  s_8d4b63dc56ae38::t_758341f7d98efa 1-231
+MyApp/MyApp.swift
+  s_8d4b63dc56ae38::t_b3f26208bbbd06 1-539
+MyApp/NotchViews.swift
+  s_8d4b63dc56ae38::t_7c5bf260f72eba 1-734
+MyApp/SpotifyManager.swift
+  s_8d4b63dc56ae38::t_fc3ffe0b3662ff 1-154
+"Untitled Project.xcodeproj/project.pbxproj"
+  s_8d4b63dc56ae38::t_f3ca282f8cd7af 1-352
+scripts/claude-statusline.sh
+  s_8d4b63dc56ae38::t_05962e3edd15bc 1-35
+MyApp/FloatingPanel.swift
+  s_8d4b63dc56ae38::t_51b473050cbae7 1-456
+MyApp/AnimatedIcons.swift
+  s_8d4b63dc56ae38::t_9bdf0694f6ab25 1-188
+MyApp/Assets.xcassets/AccentColor.colorset/Contents.json
+  s_8d4b63dc56ae38::t_28c658e2b7365c 1-11
+MyApp/Assets.xcassets/Contents.json
+  s_8d4b63dc56ae38::t_9fb7cc98d6d510 1-6
+MyApp/ContentView.swift
+  s_8d4b63dc56ae38::t_fd9926cae0b3f6 1-17
+MyApp/MediaControlManager.swift
+  s_8d4b63dc56ae38::t_9c85c2a4738f6b 1-74
+MyApp/NotificationManager.swift
+  s_8d4b63dc56ae38::t_b33f614825fd88 1-99
+MyApp/SystemMonitor.swift
+  s_8d4b63dc56ae38::t_77bd000be106ab 1-120
+MyApp/TemperatureMonitor.swift
+  s_8d4b63dc56ae38::t_6c65d1838257f9 1-143
+MyApp/ThemeManager.swift
+  s_8d4b63dc56ae38::t_9b5f33c3d62a3d 1-140
+MyApp/TrayManager.swift
+  s_8d4b63dc56ae38::t_7ced26d5bc3e3b 1-40
+"Untitled Project.xcodeproj/project.xcworkspace/contents.xcworkspacedata"
+  s_8d4b63dc56ae38::t_e07fe9013b441f 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "26b17ffccd411b143ce80c112e694d8ca0e0ecb9",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
