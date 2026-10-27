@@ -35,7 +35,12 @@ On first use macOS asks for these permissions:
 - **Calendars:** for the calendar strip.
 - **Automation (Spotify / Music):** for the current track and playback controls.
 
-If the app is signed ad hoc (no team set in Xcode), macOS treats each new build as a new app and asks again. Set a development team under *Signing & Capabilities* to keep the permissions across builds.
+By default the app is signed ad hoc, so macOS treats each new build as a new app and asks again. To keep the permissions across builds, sign with a stable identity: create `Signing.local.xcconfig` (not committed) next to `Signing.xcconfig` with your identity, for example an Apple Development certificate or a self-signed code signing certificate:
+
+```
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = DynamicIsland Local Signing
+```
 
 ## Claude plan usage
 

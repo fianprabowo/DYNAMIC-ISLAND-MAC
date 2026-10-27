@@ -67,3 +67,6 @@ fastlane/test_output
 # Build output
 build/
 DerivedData/
+
+# Local signing identity
+Signing.local.xcconfig

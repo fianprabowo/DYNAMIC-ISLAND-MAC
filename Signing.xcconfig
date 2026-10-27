@@ -1,0 +1,11 @@
+// Code signing. By default Xcode signs to run locally (ad hoc), and macOS then treats every
+// build as a new app and asks for Calendar and Automation access again.
+// To keep those permissions, sign with a stable identity in Signing.local.xcconfig, which
+// isn't committed. For example:
+//
+//   CODE_SIGN_STYLE = Manual
+//   CODE_SIGN_IDENTITY = DynamicIsland Local Signing
+
+CODE_SIGN_STYLE = Automatic
+
+#include? "Signing.local.xcconfig"
