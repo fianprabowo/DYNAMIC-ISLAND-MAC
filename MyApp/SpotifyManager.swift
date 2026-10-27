@@ -17,7 +17,7 @@ class SpotifyManager: ObservableObject {
     init() {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                self?.refresh()
+                await self?.refresh()
                 try? await Task.sleep(for: .seconds(1.5))
             }
         }
@@ -27,9 +27,14 @@ class SpotifyManager: ObservableObject {
         pollTask?.cancel()
     }
 
-    func refresh() {
+    func refresh() async {
         // Prefer whichever player is actually playing; otherwise show the first one with a track loaded.
-        let snapshots = MediaPlayerApp.runningApps.compactMap { app in fetchSnapshot(from: app).map { (app, $0) } }
+        var snapshots: [(MediaPlayerApp, Snapshot)] = []
+        for app in MediaPlayerApp.runningApps {
+            if let snapshot = await fetchSnapshot(from: app) {
+                snapshots.append((app, snapshot))
+            }
+        }
         guard let (app, snapshot) = snapshots.first(where: { $0.1.isPlaying }) ?? snapshots.first else {
             reset()
             return
@@ -50,24 +55,23 @@ class SpotifyManager: ObservableObject {
         if trackKey != artworkTrackKey {
             artworkTrackKey = trackKey
             artwork = nil
-            loadArtwork(from: app, trackKey: trackKey)
+            await loadArtwork(from: app, trackKey: trackKey)
         }
     }
 
-    private func loadArtwork(from app: MediaPlayerApp, trackKey: String) {
+    private func loadArtwork(from app: MediaPlayerApp, trackKey: String) async {
+        let data: Data?
         switch app {
         case .spotify:
-            guard let urlString = AppleScriptRunner.run("tell application \"Spotify\" to artwork url of current track")?.stringValue,
+            guard let urlString = await AppleScriptRunner.run("tell application \"Spotify\" to artwork url of current track")?.stringValue,
                   let url = URL(string: urlString) else { return }
-            Task { [weak self] in
-                guard let (data, _) = try? await URLSession.shared.data(from: url),
-                      self?.artworkTrackKey == trackKey else { return }
-                self?.artwork = NSImage(data: data)
-            }
+            data = try? await URLSession.shared.data(from: url).0
         case .music:
-            let data = AppleScriptRunner.run("tell application \"Music\" to get raw data of artwork 1 of current track")?.data
-            artwork = data.flatMap(NSImage.init(data:))
+            data = await AppleScriptRunner.run("tell application \"Music\" to get raw data of artwork 1 of current track")?.data
         }
+        // The track may have changed while the artwork loaded.
+        guard artworkTrackKey == trackKey else { return }
+        artwork = data.flatMap(NSImage.init(data:))
     }
 
     private func reset() {
@@ -90,7 +94,7 @@ class SpotifyManager: ObservableObject {
         let isPlaying: Bool
     }
 
-    private func fetchSnapshot(from app: MediaPlayerApp) -> Snapshot? {
+    private func fetchSnapshot(from app: MediaPlayerApp) async -> Snapshot? {
         // Spotify reports duration in milliseconds, Music in seconds.
         let durationExpression = app == .spotify ? "(duration of current track) / 1000" : "duration of current track"
         let source = """
@@ -100,7 +104,7 @@ class SpotifyManager: ObservableObject {
         end tell
         """
 
-        guard let result = AppleScriptRunner.run(source), result.numberOfItems == 6,
+        guard let result = await AppleScriptRunner.run(source), result.numberOfItems == 6,
               let track = result.atIndex(1)?.stringValue, !track.isEmpty else { return nil }
 
         return Snapshot(
@@ -144,11 +148,19 @@ enum MediaPlayerApp: String, CaseIterable {
     }
 }
 
-enum AppleScriptRunner {
+/// Runs scripts one at a time on a background queue. A script waits for its target app, and for
+/// the user to answer macOS's Automation prompt; on the main thread that froze the whole island.
+nonisolated enum AppleScriptRunner {
+    private static let queue = DispatchQueue(label: "AppleScriptRunner")
+
     @discardableResult
-    static func run(_ source: String) -> NSAppleEventDescriptor? {
-        var error: NSDictionary?
-        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        return error == nil ? result : nil
+    static func run(_ source: String) async -> NSAppleEventDescriptor? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                var error: NSDictionary?
+                let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
+                continuation.resume(returning: error == nil ? result : nil)
+            }
+        }
     }
 }

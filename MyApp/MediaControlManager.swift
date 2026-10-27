@@ -9,7 +9,7 @@ class MediaControlManager: ObservableObject {
     private let debounceInterval: TimeInterval = 0.3
 
     init() {
-        refreshVolume()
+        Task { await refreshVolume() }
     }
 
     func playPause() {
@@ -41,16 +41,17 @@ class MediaControlManager: ObservableObject {
     }
 
     func toggleMute() {
-        AppleScriptRunner.run("set volume output muted (not (output muted of (get volume settings)))")
+        Task { _ = await AppleScriptRunner.run("set volume output muted (not (output muted of (get volume settings)))") }
     }
 
     func setVolume(_ newValue: Int) {
         volume = max(0, min(100, newValue))
-        AppleScriptRunner.run("set volume output volume \(volume)")
+        let source = "set volume output volume \(volume)"
+        Task { _ = await AppleScriptRunner.run(source) }
     }
 
-    private func refreshVolume() {
-        if let value = AppleScriptRunner.run("output volume of (get volume settings)")?.int32Value {
+    private func refreshVolume() async {
+        if let value = await AppleScriptRunner.run("output volume of (get volume settings)")?.int32Value {
             volume = Int(value)
         }
     }
@@ -59,16 +60,20 @@ class MediaControlManager: ObservableObject {
         guard Date().timeIntervalSince(lastCommandDate) > debounceInterval else { return }
         lastCommandDate = Date()
 
-        guard let app = activePlayer() else { return }
-        AppleScriptRunner.run("tell application \"\(app.scriptName)\" to \(command)")
+        Task {
+            guard let app = await activePlayer() else { return }
+            await AppleScriptRunner.run("tell application \"\(app.scriptName)\" to \(command)")
+        }
     }
 
     /// The player that is currently playing, otherwise the first one that is running.
-    private func activePlayer() -> MediaPlayerApp? {
+    private func activePlayer() async -> MediaPlayerApp? {
         let running = MediaPlayerApp.runningApps
-        let playing = running.first { app in
-            AppleScriptRunner.run("tell application \"\(app.scriptName)\" to player state as string")?.stringValue == "playing"
+        for app in running {
+            if await AppleScriptRunner.run("tell application \"\(app.scriptName)\" to player state as string")?.stringValue == "playing" {
+                return app
+            }
         }
-        return playing ?? running.first
+        return running.first
     }
 }
