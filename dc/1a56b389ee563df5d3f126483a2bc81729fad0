@@ -1,0 +1,28 @@
+MyApp/MediaControlManager.swift
+  s_8d4b63dc56ae38::t_43d68aafa725c4 44,50
+  s_8d4b63dc56ae38::t_e8b6430e2600b3 49,72-75
+  s_8d4b63dc56ae38::t_e4ecf60d475916 12,53-54,63-66,70,77
+MyApp/SpotifyManager.swift
+  s_8d4b63dc56ae38::t_b402c3a523f769 58,62-63,66,68,70,72-74
+  s_8d4b63dc56ae38::t_6fc4ac62b93f89 97
+  s_8d4b63dc56ae38::t_ce52fd9aae24e6 30,32-37
+  s_8d4b63dc56ae38::t_82b6b477e107ea 151-155,157-164
+  s_8d4b63dc56ae38::t_9f4546506ce30b 107
+  s_8d4b63dc56ae38::t_110864bfbf2ce5 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "dc1a56b389ee563df5d3f126483a2bc81729fad0",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
