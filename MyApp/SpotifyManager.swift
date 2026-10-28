@@ -40,10 +40,6 @@ class SpotifyManager: ObservableObject {
             return
         }
 
-        if snapshot.track != currentTrack && snapshot.isPlaying {
-            NotificationManager.shared.post(.music, title: snapshot.track, body: snapshot.artist)
-        }
-
         sourceApp = app
         currentTrack = snapshot.track
         currentArtist = snapshot.artist

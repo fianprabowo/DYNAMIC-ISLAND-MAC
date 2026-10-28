@@ -42,6 +42,8 @@ struct NotchIslandView: View {
                     ))
             } else if layout.showsBanner, let banner = notificationManager.banner {
                 NotchBannerView(notification: banner)
+                    // The next banner in line fades in over this one.
+                    .id(banner.id)
                     .transition(.asymmetric(
                         insertion: .opacity.animation(.easeIn(duration: 0.2).delay(0.08)),
                         removal: .opacity.animation(.easeOut(duration: 0.12))

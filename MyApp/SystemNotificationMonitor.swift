@@ -14,6 +14,7 @@ class SystemNotificationMonitor {
     private let reader = NotificationDatabaseReader()
     private var watcher: DispatchSourceFileSystemObject?
     private var pollTask: Task<Void, Never>?
+    private var hasReadNotifyingApps = false
 
     /// SQLite writes new records to the write-ahead log first.
     private static let walPath = NotificationDatabaseReader.path + "-wal"
@@ -25,6 +26,7 @@ class SystemNotificationMonitor {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.watchDatabase()
+                await self?.readNotifyingApps()
                 await self?.postNewNotifications()
                 try? await Task.sleep(for: .seconds(3))
             }
@@ -56,6 +58,14 @@ class SystemNotificationMonitor {
         self.watcher = watcher
     }
 
+    /// Tells the notification manager which apps notify at all, so their Dock badges can announce
+    /// notifications (see DockBadgeWatcher).
+    private func readNotifyingApps() async {
+        guard !hasReadNotifyingApps, let apps = await reader.appsWithNotifications() else { return }
+        hasReadNotifyingApps = true
+        notificationManager.addNotifyingApps(apps)
+    }
+
     private func postNewNotifications() async {
         for record in await reader.newRecords() {
             let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: record.appID)
@@ -78,6 +88,25 @@ actor NotificationDatabaseReader {
     /// read, so notifications from before launch aren't shown again. Times rather than record ids,
     /// because a notification that replaces an earlier one (same app and identifier) keeps its record.
     private var lastDeliveryDate: Double?
+
+    /// Bundle identifiers (lowercased, as the app table keeps them) of apps with notifications in
+    /// Notification Center; nil if the database can't be read.
+    func appsWithNotifications() -> Set<String>? {
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        guard sqlite3_open_v2(Self.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return nil }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, "SELECT DISTINCT a.identifier FROM app a JOIN record r USING (app_id)", -1, &statement, nil) == SQLITE_OK else { return nil }
+        var apps: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let identifier = sqlite3_column_text(statement, 0) {
+                apps.insert(String(cString: identifier).lowercased())
+            }
+        }
+        return apps
+    }
 
     func newRecords() -> [Record] {
         var db: OpaquePointer?
