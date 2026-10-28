@@ -205,6 +205,7 @@ private struct NotchBannerView: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .help(notification.url?.absoluteString ?? "")
             }
         }
         .padding(.horizontal, 18)
@@ -914,6 +915,8 @@ private struct EventList: View {
                         .padding(.vertical, 3)
                         .background(Color.green)
                         .clipShape(Capsule())
+                        // Invitations come from anyone: show where the link goes before it's clicked.
+                        .help(joinURL.absoluteString)
                     }
                 }
             }

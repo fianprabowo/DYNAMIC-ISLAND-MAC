@@ -265,9 +265,13 @@ class NotificationManager: ObservableObject {
         bannerQueue.removeAll()
     }
 
+    /// The feed holds message text, so only the user can read it.
     private func save() {
-        try? FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let directory = Self.storeURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         try? JSONEncoder().encode(notifications).write(to: Self.storeURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.storeURL.path)
     }
 
     private func sendSystemNotification(_ notification: AppNotification) {

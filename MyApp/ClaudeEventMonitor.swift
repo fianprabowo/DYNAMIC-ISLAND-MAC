@@ -25,6 +25,25 @@ class ClaudeEventMonitor {
         "WarpTerminal": "dev.warp.Warp-Stable",
     ]
 
+    /// Apps Claude Code runs in. Any process of the user's can write to the log, so a banner only
+    /// ever opens one of these, never an app the log names.
+    private static let knownTerminals: Set<String> = Set(terminalBundleIDs.values).union([
+        "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92", // Cursor
+        "com.exafunction.windsurf",
+        "dev.zed.Zed",
+        "org.alacritty",
+        "net.kovidgoyal.kitty",
+        "co.zeit.hyper",
+        "com.anthropic.claudefordesktop",
+    ])
+
+    /// Longer text is cut; Claude Code's messages are a short sentence.
+    private static let maxMessageLength = 200
+    private static let maxFolderLength = 60
+    /// More new data than this at once isn't the hook's doing; it's skipped instead of read.
+    private static let maxReadSize: UInt64 = 1024 * 1024
+
     init(notificationManager: NotificationManager) {
         self.notificationManager = notificationManager
         pollTask = Task { [weak self] in
@@ -54,7 +73,7 @@ class ClaudeEventMonitor {
         }
         // The hook empties the log once it gets long.
         let start = size < previous ? 0 : previous
-        guard size > start else {
+        guard size > start, size - start <= Self.maxReadSize else {
             offset = size
             return
         }
@@ -83,9 +102,9 @@ class ClaudeEventMonitor {
 
         // An empty path would resolve to the app's own working directory.
         let cwd = event["cwd"] as? String ?? ""
-        let folder = cwd.isEmpty ? "" : URL(fileURLWithPath: cwd).lastPathComponent
+        let folder = cwd.isEmpty ? "" : String(URL(fileURLWithPath: cwd).lastPathComponent.prefix(Self.maxFolderLength))
         let title = folder.isEmpty || folder == "/" ? "Claude Code" : folder
-        let message = event["message"] as? String ?? ""
+        let message = String((event["message"] as? String ?? "").prefix(Self.maxMessageLength))
 
         switch event["event"] as? String {
         case "Notification":
@@ -102,9 +121,12 @@ class ClaudeEventMonitor {
         }
     }
 
-    /// The app Claude Code runs in (clicking the banner opens it), if it's installed.
+    /// The app Claude Code runs in (clicking the banner opens it), if it's a known one and installed.
     private func terminalBundleID(_ event: [String: Any]) -> String? {
         let candidates = [event["app"] as? String, (event["terminal"] as? String).flatMap { Self.terminalBundleIDs[$0] }]
-        return candidates.compactMap { $0 }.first { !$0.isEmpty && NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil }
+        return candidates.compactMap { $0 }.first { appID in
+            (Self.knownTerminals.contains(appID) || appID.hasPrefix("com.jetbrains."))
+                && NSWorkspace.shared.urlForApplication(withBundleIdentifier: appID) != nil
+        }
     }
 }
