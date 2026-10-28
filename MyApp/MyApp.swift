@@ -28,11 +28,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let claudeUsageMonitor = ClaudeUsageMonitor()
     let systemNotificationMonitor = SystemNotificationMonitor(notificationManager: .shared)
     let dockBadgeWatcher = DockBadgeWatcher(notificationManager: .shared)
+    let claudeEventMonitor = ClaudeEventMonitor(notificationManager: .shared)
+    let powerMonitor = PowerMonitor(notificationManager: .shared)
+    let headphonesWatcher = HeadphonesWatcher(notificationManager: .shared)
+    let hudMonitor = HUDMonitor()
+    let timerManager = TimerManager(notificationManager: .shared)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         themeManager.loadPreference()
         enableLaunchAtLoginOnFirstRun()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        timerManager.prepareForQuit()
     }
 
     /// Turns on Launch at Login once, the first time the installed copy in /Applications runs.
@@ -71,6 +80,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(islandLayout)
                     .environmentObject(calendarManager)
                     .environmentObject(claudeUsageMonitor)
+                    .environmentObject(hudMonitor)
+                    .environmentObject(timerManager)
             )
         )
 
@@ -541,4 +552,6 @@ struct SettingsView: View {
         .environmentObject(IslandLayout())
         .environmentObject(CalendarManager())
         .environmentObject(ClaudeUsageMonitor())
+        .environmentObject(HUDMonitor())
+        .environmentObject(TimerManager(notificationManager: .shared))
 }
