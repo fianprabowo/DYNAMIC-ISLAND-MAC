@@ -15,12 +15,22 @@ struct AppNotification: Identifiable, Codable {
     /// A banner shown as soon as an app's Dock badge went up, before the notification's details
     /// arrive (see DockBadgeWatcher). It isn't added to the feed.
     var isPending = false
+    /// Opened on a click instead of the app, like a meeting's video call link.
+    var url: URL? = nil
+    /// A button on the banner that does what a click does, like "Join".
+    var actionTitle: String? = nil
+    /// A level shown as a bar on the banner (0…1), like the battery while charging.
+    var progress: Double? = nil
+    /// An SF Symbol in place of the type's, like the headphones that connected.
+    var symbol: String? = nil
 
-    var icon: String { type.icon }
+    var icon: String { symbol ?? type.icon }
 }
 
 enum NotificationType: String, CaseIterable, Codable {
     case system, message, warning, reminder, network, app
+    /// The island's own live activities (see `NotificationManager.postActivity`).
+    case claude, meeting, power, audio, timer
 
     var icon: String {
         switch self {
@@ -30,6 +40,11 @@ enum NotificationType: String, CaseIterable, Codable {
         case .reminder: return "bell.fill"
         case .network: return "wifi"
         case .app: return "app.badge.fill"
+        case .claude: return "sparkle"
+        case .meeting: return "video.fill"
+        case .power: return "battery.100percent.bolt"
+        case .audio: return "headphones"
+        case .timer: return "timer"
         }
     }
 
@@ -109,6 +124,31 @@ class NotificationManager: ObservableObject {
 
         // During a Focus it's only added to the feed.
         guard !FocusStatus.isActive else { return }
+        enqueueBanner(notification)
+    }
+
+    /// One of the island's own live activities (Claude Code, a meeting, charging, headphones, a
+    /// timer), shown on the notch like another app's notification. Most aren't kept in the feed.
+    func postActivity(_ notification: AppNotification, keepInFeed: Bool = false, duringFocus: Bool = false) {
+        if keepInFeed {
+            add(notification)
+        }
+        guard duringFocus || !FocusStatus.isActive else { return }
+        enqueueBanner(notification)
+    }
+
+    /// Changes an activity's banner in place, showing or waiting, like headphones' battery levels
+    /// that arrive after they connected.
+    func updateActivity(_ notification: AppNotification) {
+        if banner?.id == notification.id {
+            banner = notification
+        }
+        if let index = bannerQueue.firstIndex(where: { $0.id == notification.id }) {
+            bannerQueue[index] = notification
+        }
+    }
+
+    private func enqueueBanner(_ notification: AppNotification) {
         if let banner, !banner.isPending {
             bannerQueue.append(notification)
         } else {
@@ -169,15 +209,16 @@ class NotificationManager: ObservableObject {
     }
 
     /// Shows the next waiting notification, or hides the banner. Several waiting from one app
-    /// show as one banner.
+    /// show as one banner; activities always show one by one.
     private func showNextBanner() {
         guard let next = bannerQueue.first else {
             banner = nil
             return
         }
-        let fromSameApp = bannerQueue.filter { $0.appBundleID == next.appBundleID }
+        let isFromSameApp = { (other: AppNotification) in other.type == .app && other.appBundleID == next.appBundleID }
+        let fromSameApp = next.type == .app ? bannerQueue.filter(isFromSameApp) : []
         if fromSameApp.count >= summaryThreshold {
-            bannerQueue.removeAll { $0.appBundleID == next.appBundleID }
+            bannerQueue.removeAll(where: isFromSameApp)
             let appName = next.appName ?? next.title
             let summary = AppNotification(type: .app, title: appName, body: "\(fromSameApp.count) new notifications", appName: appName, appBundleID: next.appBundleID)
             showBanner(summary, for: bannerQueue.isEmpty ? bannerDuration : queuedBannerDuration)
@@ -224,9 +265,13 @@ class NotificationManager: ObservableObject {
         bannerQueue.removeAll()
     }
 
+    /// The feed holds message text, so only the user can read it.
     private func save() {
-        try? FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let directory = Self.storeURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         try? JSONEncoder().encode(notifications).write(to: Self.storeURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Self.storeURL.path)
     }
 
     private func sendSystemNotification(_ notification: AppNotification) {

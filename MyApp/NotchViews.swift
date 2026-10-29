@@ -10,6 +10,9 @@ struct NotchIslandView: View {
     @EnvironmentObject var spotifyManager: SpotifyManager
     @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var themeManager: ThemeManager
+    @EnvironmentObject var calendarManager: CalendarManager
+    @EnvironmentObject var timerManager: TimerManager
+    @EnvironmentObject var hud: HUDMonitor
 
     var body: some View {
         // The island is an overlay on a flexible clear base, so its size never becomes the hosting
@@ -24,10 +27,20 @@ struct NotchIslandView: View {
             .onChange(of: notificationManager.banner?.id) {
                 layout.setShowsBanner(notificationManager.banner != nil)
             }
+            // Initial too: after floating mode the level may have gone while this view was away.
+            .onChange(of: showsHUD, initial: true) { _, shows in
+                layout.setShowsHUD(shows)
+            }
+    }
+
+    /// A banner isn't covered by the level: it would run out unseen underneath.
+    private var showsHUD: Bool {
+        hud.level != nil && notificationManager.banner == nil
     }
 
     private var island: some View {
         let size = layout.isExpanded ? IslandLayout.notchExpandedSize
+            : layout.showsHUD ? layout.notchHUDSize
             : layout.showsBanner ? layout.notchBannerSize : layout.notchCollapsedSize
 
         return ZStack(alignment: .top) {
@@ -40,6 +53,9 @@ struct NotchIslandView: View {
                         removal: .opacity.combined(with: .scale(scale: 0.9, anchor: .top))
                             .animation(.easeOut(duration: 0.15))
                     ))
+            } else if layout.showsHUD, let level = hud.level {
+                NotchHUDView(level: level)
+                    .transition(.opacity.animation(.easeInOut(duration: 0.15)))
             } else if layout.showsBanner, let banner = notificationManager.banner {
                 NotchBannerView(notification: banner)
                     // The next banner in line fades in over this one.
@@ -61,11 +77,17 @@ struct NotchIslandView: View {
     }
 
     private var cornerRadius: CGFloat {
-        layout.isExpanded ? 24 : layout.showsBanner ? 20 : 10
+        layout.isExpanded ? 24 : layout.showsHUD ? 10 : layout.showsBanner ? 20 : 10
     }
 
     private var hasActivity: Bool {
         spotifyManager.isPlaying || notificationManager.unreadCount > 0 || claudeUsage.snapshot.isWorking
+            || timerManager.isActive || calendarManager.upcomingMeeting != nil
+    }
+
+    /// The meeting's icon is on the left only when nothing else is live.
+    private var leftWingShowsMeeting: Bool {
+        !claudeUsage.snapshot.isWorking && !spotifyManager.isPlaying && !timerManager.isActive && calendarManager.upcomingMeeting != nil
     }
 
     /// Black bar around the notch with a "wing" on each side for status icons. The bar always has
@@ -73,7 +95,8 @@ struct NotchIslandView: View {
     /// slide into view as the island widens.
     ///
     /// Claude and music can be live at the same time: Claude takes the left wing and the music bars
-    /// the right one, so both animations stay visible. Unread notifications come last.
+    /// the right one, so both animations stay visible. A meeting's countdown, then a timer, take the
+    /// right wing before anything else, since they're about time. Unread notifications come last.
     private var collapsedBar: some View {
         HStack(spacing: 0) {
             Group {
@@ -85,6 +108,14 @@ struct NotchIslandView: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: 20, height: 20)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
+                } else if timerManager.isActive && !spotifyManager.isPlaying {
+                    Image(systemName: "timer")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(timerColor)
+                } else if leftWingShowsMeeting, let meeting = calendarManager.upcomingMeeting {
+                    Image(systemName: meeting.joinURL == nil ? "calendar" : "video.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(meeting.color))
                 } else {
                     // Music without album art yet, or only notifications.
                     Image(systemName: spotifyManager.isPlaying ? "music.note" : "bell.fill")
@@ -98,7 +129,13 @@ struct NotchIslandView: View {
             Spacer(minLength: layout.notchSize.width)
 
             Group {
-                if spotifyManager.isPlaying {
+                if let meeting = calendarManager.upcomingMeeting {
+                    MeetingCountdown(meeting: meeting, showsIcon: !leftWingShowsMeeting)
+                } else if timerManager.isActive {
+                    TimerCountdown(compact: true)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(timerColor)
+                } else if spotifyManager.isPlaying {
                     EqualizerBars(color: themeManager.currentTheme.accentColor)
                         .frame(width: 18, height: 12)
                 } else if claudeUsage.snapshot.isWorking {
@@ -117,15 +154,13 @@ struct NotchIslandView: View {
 }
 
 // MARK: - Notification Banner
-/// Another app's notification below the notch. Clicking it opens that app.
+/// Another app's notification, or one of the island's own activities, below the notch. Clicking it
+/// opens its link or its app.
 private struct NotchBannerView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var notificationManager: NotificationManager
+    @EnvironmentObject var themeManager: ThemeManager
     let notification: AppNotification
-
-    private var appURL: URL? {
-        notification.appBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
-    }
 
     private var appName: String {
         notification.appName ?? ""
@@ -133,16 +168,8 @@ private struct NotchBannerView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Group {
-                if let appURL {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
-                        .resizable()
-                } else {
-                    Image(systemName: notification.icon)
-                        .font(.system(size: 20))
-                }
-            }
-            .frame(width: 34, height: 34)
+            NotificationIcon(notification: notification, symbolSize: 20)
+                .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 1) {
                 if !appName.isEmpty && appName != notification.title {
@@ -157,10 +184,29 @@ private struct NotchBannerView: View {
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.75))
                 }
+                if let progress = notification.progress {
+                    LevelBar(value: progress, color: notificationTint(notification.type, themeManager))
+                        .frame(width: 140, height: 4)
+                        .padding(.top, 3)
+                }
             }
             .lineLimit(1)
 
             Spacer(minLength: 0)
+
+            if let actionTitle = notification.actionTitle {
+                Button(action: open) {
+                    Text(actionTitle)
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Color.green)
+                        .clipShape(Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(notification.url?.absoluteString ?? "")
+            }
         }
         .padding(.horizontal, 18)
         // The top of the island sits behind the physical notch.
@@ -168,13 +214,164 @@ private struct NotchBannerView: View {
         .padding(.bottom, 8)
         .contentShape(Rectangle())
         .onHover { notificationManager.holdBanner($0) }
-        .onTapGesture {
-            if let appURL {
-                NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
-            }
-            notificationManager.dismissBanner()
+        .onTapGesture(perform: open)
+    }
+
+    private func open() {
+        notification.open()
+        notificationManager.dismissBanner()
+    }
+}
+
+/// The app's icon for other apps' notifications, otherwise the notification's symbol.
+private struct NotificationIcon: View {
+    @EnvironmentObject var themeManager: ThemeManager
+    let notification: AppNotification
+    let symbolSize: CGFloat
+
+    var body: some View {
+        if notification.type == .app, let appURL = notification.appURL {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
+                .resizable()
+        } else {
+            Image(systemName: notification.icon)
+                .font(.system(size: symbolSize))
+                .foregroundColor(notificationTint(notification.type, themeManager))
         }
     }
+}
+
+private let timerColor = Color.orange
+
+private func notificationTint(_ type: NotificationType, _ themeManager: ThemeManager) -> Color {
+    switch type {
+    case .claude: return claudeOrange
+    case .meeting: return .red
+    case .power: return .green
+    case .audio: return .white
+    case .timer: return timerColor
+    default: return Color(themeManager.currentTheme.accentColor)
+    }
+}
+
+private extension AppNotification {
+    var appURL: URL? {
+        appBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+    }
+
+    /// Opens the notification's link (like a meeting's call), otherwise its app.
+    func open() {
+        if let url {
+            NSWorkspace.shared.open(url)
+        } else if let appURL {
+            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+}
+
+/// A level from 0 to 1 as a filled capsule.
+private struct LevelBar: View {
+    let value: Double
+    let color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.2))
+                Capsule()
+                    .fill(color)
+                    .frame(width: proxy.size.width * min(max(value, 0), 1))
+            }
+        }
+    }
+}
+
+// MARK: - Volume and Brightness
+/// The level in wider wings beside the notch, like the iPhone's Dynamic Island.
+private struct NotchHUDView: View {
+    @EnvironmentObject var layout: IslandLayout
+    let level: HUDMonitor.Level
+
+    private var shownValue: Double {
+        level.isMuted ? 0 : min(max(level.value, 0), 1)
+    }
+
+    private var symbol: String {
+        switch level.kind {
+        case .volume:
+            if level.isMuted || shownValue == 0 { return "speaker.slash.fill" }
+            return shownValue < 0.34 ? "speaker.wave.1.fill" : shownValue < 0.67 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"
+        case .brightness:
+            return shownValue < 0.5 ? "sun.min.fill" : "sun.max.fill"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: IslandLayout.notchHUDWing)
+
+            // The physical notch covers this part.
+            Spacer(minLength: layout.notchSize.width)
+
+            LevelBar(value: shownValue, color: .white)
+                .frame(height: 5)
+                .padding(.horizontal, 12)
+                .frame(width: IslandLayout.notchHUDWing)
+        }
+        .frame(width: layout.notchHUDSize.width, height: layout.notchSize.height)
+        .animation(.easeOut(duration: 0.12), value: level)
+    }
+}
+
+// MARK: - Countdowns
+/// Minutes until a meeting starts, beside the notch.
+private struct MeetingCountdown: View {
+    let meeting: CalendarEvent
+    let showsIcon: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+            let untilStart = meeting.start.timeIntervalSince(context.date)
+            HStack(spacing: 2) {
+                if showsIcon {
+                    Image(systemName: meeting.joinURL == nil ? "calendar" : "video.fill")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                Text(untilStart > 0 ? "\(Int((untilStart / 60).rounded(.up)))m" : "now")
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .foregroundColor(untilStart <= 60 ? .red : Color(meeting.color))
+        }
+    }
+}
+
+/// Time left on the timer, updated every second.
+private struct TimerCountdown: View {
+    @EnvironmentObject var timerManager: TimerManager
+    /// Beside the notch an hour or more reads "1h05".
+    let compact: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(formatCountdown(timerManager.remaining(at: context.date), compact: compact))
+                .monospacedDigit()
+                .opacity(timerManager.isRunning ? 1 : 0.5)
+        }
+    }
+}
+
+/// 125 → "2:05"; 3900 → "1:05:00", or "1h05" when compact.
+private func formatCountdown(_ seconds: TimeInterval, compact: Bool) -> String {
+    let total = Int(seconds.rounded(.up))
+    let hours = total / 3600
+    let minutes = total % 3600 / 60
+    if hours > 0 {
+        return compact ? String(format: "%dh%02d", hours, minutes) : String(format: "%d:%02d:%02d", hours, minutes, total % 60)
+    }
+    return String(format: "%d:%02d", minutes, total % 60)
 }
 
 // MARK: - Expanded Panel
@@ -204,6 +401,8 @@ private struct NotchExpandedView: View {
                     }
                 case .alerts:
                     AlertsView()
+                case .timer:
+                    TimerView()
                 case .system:
                     HStack(alignment: .top, spacing: 20) {
                         StatsTabView(systemMonitor: systemMonitor, themeManager: themeManager)
@@ -221,7 +420,8 @@ private struct NotchExpandedView: View {
         }
     }
 
-    /// Tab pills on the left of the notch, settings on the right.
+    /// Tab pills on the left of the notch, settings on the right. Only the selected tab shows its
+    /// name, so all of them fit beside the notch.
     private var topBar: some View {
         HStack(spacing: 0) {
             HStack(spacing: 4) {
@@ -230,8 +430,10 @@ private struct NotchExpandedView: View {
                         HStack(spacing: 4) {
                             Image(systemName: tab.icon)
                                 .font(.system(size: 10, weight: .semibold))
-                            Text(tab.rawValue)
-                                .font(.system(size: 11, weight: .semibold))
+                            if layout.selectedTab == tab {
+                                Text(tab.rawValue)
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
                         }
                         .foregroundColor(layout.selectedTab == tab ? .white : .gray)
                         .padding(.horizontal, 8)
@@ -241,6 +443,7 @@ private struct NotchExpandedView: View {
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .help(tab.rawValue)
                 }
             }
             .padding(.leading, 16)
@@ -319,27 +522,13 @@ private struct AlertsView: View {
 
 private struct AlertRow: View {
     @EnvironmentObject var notificationManager: NotificationManager
-    @EnvironmentObject var themeManager: ThemeManager
     let notification: AppNotification
     @State private var isHovered = false
 
-    private var appURL: URL? {
-        notification.appBundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
-    }
-
     var body: some View {
         HStack(spacing: 10) {
-            Group {
-                if let appURL {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
-                        .resizable()
-                } else {
-                    Image(systemName: notification.icon)
-                        .font(.system(size: 13))
-                        .foregroundColor(Color(themeManager.currentTheme.accentColor))
-                }
-            }
-            .frame(width: 24, height: 24)
+            NotificationIcon(notification: notification, symbolSize: 13)
+                .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(notification.title)
@@ -375,9 +564,7 @@ private struct AlertRow: View {
         .onHover { isHovered = $0 }
         // Clicking a notification from another app opens that app.
         .onTapGesture {
-            if let appURL {
-                NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
-            }
+            notification.open()
         }
     }
 }
@@ -404,10 +591,12 @@ private struct PinButton: View {
 private struct SettingsMenu: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var themeManager: ThemeManager
+    @EnvironmentObject var hud: HUDMonitor
 
     var body: some View {
         Menu {
             Toggle("Open on Hover", isOn: $layout.openOnHover)
+            Toggle("Show Volume & Brightness", isOn: $hud.isEnabled)
             Toggle("Launch at Login", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.isEnabled = $0 }))
             Picker("Theme", selection: Binding(get: { themeManager.currentPreset }, set: { themeManager.setTheme($0) })) {
                 ForEach(ThemeManager.ThemePreset.allCases, id: \.self) { preset in
@@ -429,6 +618,96 @@ private struct SettingsMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .tint(.gray)
+    }
+}
+
+// MARK: - Timer
+/// A ring with the time left, presets, and Pomodoro (focus, then a break).
+private struct TimerView: View {
+    @EnvironmentObject var timerManager: TimerManager
+
+    private static let presets = [1, 5, 10, 15, 30, 60]
+
+    var body: some View {
+        HStack(spacing: 24) {
+            ring
+                .frame(width: 104, height: 104)
+
+            VStack(alignment: .leading, spacing: 10) {
+                if timerManager.isActive {
+                    HStack(spacing: 8) {
+                        if timerManager.isRunning {
+                            pill("Pause", systemImage: "pause.fill", action: timerManager.pause)
+                        } else {
+                            pill("Resume", systemImage: "play.fill", prominent: true, action: timerManager.resume)
+                        }
+                        pill("+1 min", systemImage: "plus", action: timerManager.addMinute)
+                        pill("Stop", systemImage: "stop.fill", action: timerManager.stop)
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    ForEach(Self.presets, id: \.self) { minutes in
+                        pill(minutes == 60 ? "1 h" : "\(minutes) m") { timerManager.start(minutes: minutes) }
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    pill("Pomodoro \(TimerManager.focusMinutes) + \(TimerManager.restMinutes)", systemImage: "brain.head.profile", action: timerManager.startPomodoro)
+                    Toggle("Turn On Focus", isOn: $timerManager.turnsOnFocus)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
+                        .help("During Pomodoro focus, runs the shortcuts “\(TimerManager.focusOnShortcut)” and “\(TimerManager.focusOffShortcut)”")
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var ring: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            ZStack {
+                Circle()
+                    .stroke(Color.white.opacity(0.12), lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: timerManager.isActive ? 1 - timerManager.progress(at: context.date) : 0)
+                    .stroke(timerColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 1), value: context.date)
+
+                VStack(spacing: 1) {
+                    Text(timerManager.isActive ? formatCountdown(timerManager.remaining(at: context.date), compact: false) : "0:00")
+                        .font(.system(size: 20, weight: .bold))
+                        .monospacedDigit()
+                        .opacity(timerManager.isActive && !timerManager.isRunning ? 0.5 : 1)
+                    Text(timerManager.isActive ? timerManager.phase.title : "Timer")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+
+    private func pill(_ title: String, systemImage: String? = nil, prominent: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9, weight: .bold))
+                }
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(prominent ? timerColor : Color.white.opacity(0.1))
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -624,6 +903,20 @@ private struct EventList: View {
                             .font(.system(size: 9))
                             .foregroundColor(.gray)
                             .lineLimit(1)
+                    }
+                    if let joinURL = event.joinURL, event.end > Date() {
+                        Spacer(minLength: 4)
+                        Button("Join") {
+                            NSWorkspace.shared.open(joinURL)
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.green)
+                        .clipShape(Capsule())
+                        // Invitations come from anyone: show where the link goes before it's clicked.
+                        .help(joinURL.absoluteString)
                     }
                 }
             }

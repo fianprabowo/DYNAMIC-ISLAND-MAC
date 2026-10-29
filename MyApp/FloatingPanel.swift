@@ -6,12 +6,14 @@ import SwiftUI
 enum NotchTab: String, CaseIterable {
     case nook = "Nook"
     case alerts = "Alerts"
+    case timer = "Timer"
     case system = "System"
 
     var icon: String {
         switch self {
         case .nook: return "sparkles"
         case .alerts: return "bell.fill"
+        case .timer: return "timer"
         case .system: return "chart.bar.fill"
         }
     }
@@ -37,10 +39,14 @@ class IslandLayout: ObservableObject {
     @Published private(set) var showsWings = false
     /// Whether the collapsed island shows another app's notification below the notch.
     @Published private(set) var showsBanner = false
+    /// Whether the collapsed island shows the volume or brightness level beside the notch.
+    @Published private(set) var showsHUD = false
     @Published private(set) var notchSize: CGSize
 
     /// Width of the black "wings" shown beside the physical notch while collapsed.
     static let notchWing: CGFloat = 40
+    /// The volume and brightness levels take wider wings.
+    static let notchHUDWing: CGFloat = 76
     static let notchExpandedSize = CGSize(width: 640, height: 180)
     /// Opening overshoots slightly, like the iPhone's Dynamic Island; closing settles smoothly.
     static let expandAnimation = Animation.spring(response: 0.42, dampingFraction: 0.72)
@@ -70,11 +76,18 @@ class IslandLayout: ObservableObject {
         CGSize(width: 380, height: notchSize.height + 60)
     }
 
+    var notchHUDSize: CGSize {
+        CGSize(width: notchSize.width + Self.notchHUDWing * 2, height: notchSize.height)
+    }
+
     var notchWindowSize: CGSize {
         if isExpanded {
             return Self.notchExpandedWindowSize
         }
-        return showsBanner ? notchBannerWindowSize : notchCollapsedSize
+        // The level shows over a banner for a moment; the window keeps room for the banner.
+        let base = showsBanner ? notchBannerWindowSize : notchCollapsedSize
+        guard showsHUD else { return base }
+        return CGSize(width: max(base.width, notchHUDSize.width), height: max(base.height, notchHUDSize.height))
     }
 
     private var notchBannerWindowSize: CGSize {
@@ -131,6 +144,19 @@ class IslandLayout: ObservableObject {
         } else {
             withAnimation(Self.collapseAnimation) {
                 showsBanner = false
+            }
+        }
+    }
+
+    func setShowsHUD(_ show: Bool) {
+        guard show != showsHUD else { return }
+        if show {
+            grow(to: notchHUDSize) {
+                self.showsHUD = true
+            }
+        } else {
+            withAnimation(Self.collapseAnimation) {
+                showsHUD = false
             }
         }
     }
@@ -229,7 +255,7 @@ class FloatingPanel: NSPanel {
             .removeDuplicates()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.fitFloatingContent() } }
             .store(in: &cancellables)
-        Publishers.CombineLatest3(layout.$isExpanded, layout.$showsWings, layout.$showsBanner)
+        Publishers.CombineLatest4(layout.$isExpanded, layout.$showsWings, layout.$showsBanner, layout.$showsHUD)
             .dropFirst()
             // @Published emits before the stored value changes, so read the new state on the next pass.
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
