@@ -155,12 +155,13 @@ struct NotchIslandView: View {
 
 // MARK: - Notification Banner
 /// Another app's notification, or one of the island's own activities, below the notch. Clicking it
-/// opens its link or its app.
+/// opens its link or its app. While the panel is open it shows inside it instead (`isInPanel`).
 private struct NotchBannerView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var themeManager: ThemeManager
     let notification: AppNotification
+    var isInPanel = false
 
     private var appName: String {
         notification.appName ?? ""
@@ -208,9 +209,9 @@ private struct NotchBannerView: View {
                 .help(notification.url?.absoluteString ?? "")
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, isInPanel ? 12 : 18)
         // The top of the island sits behind the physical notch.
-        .padding(.top, layout.notchSize.height + 4)
+        .padding(.top, isInPanel ? 8 : layout.notchSize.height + 4)
         .padding(.bottom, 8)
         .contentShape(Rectangle())
         .onHover { notificationManager.holdBanner($0) }
@@ -394,6 +395,7 @@ private func formatCountdown(_ seconds: TimeInterval, compact: Bool) -> String {
 // MARK: - Expanded Panel
 private struct NotchExpandedView: View {
     @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var systemMonitor: SystemMonitor
     @EnvironmentObject var temperatureMonitor: TemperatureMonitor
     @EnvironmentObject var themeManager: ThemeManager
@@ -436,6 +438,27 @@ private struct NotchExpandedView: View {
             .padding(.top, 6)
             .padding(.bottom, 14)
             .frame(maxHeight: .infinity)
+        }
+        .overlay(alignment: .bottom) {
+            ZStack { bannerToast }
+                .animation(.spring(duration: 0.3), value: notificationManager.banner?.id)
+        }
+    }
+
+    /// A notification that arrives while the panel is open, like a friend's poke, shows over the
+    /// bottom of the panel; the island can't drop down a banner then.
+    @ViewBuilder
+    private var bannerToast: some View {
+        if let banner = notificationManager.banner, !banner.isPending {
+            NotchBannerView(notification: banner, isInPanel: true)
+                .frame(width: 380)
+                .background(Color(white: 0.16))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.1)))
+                .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+                .padding(.bottom, 10)
+                .id(banner.id)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -1148,6 +1171,7 @@ private struct PokeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .onAppear(perform: poke.refreshFriends)
     }
 }
 
@@ -1207,15 +1231,24 @@ private struct PokeNameView: View {
     }
 }
 
+/// Your name and code, adding a friend and your friends on the left; on the right a message to the
+/// friend picked on the left, sent with Enter.
 private struct PokeFriendsView: View {
     @EnvironmentObject var poke: PokeService
     @State private var friendCode = ""
     @State private var message = ""
     @State private var copied = false
+    @State private var selectedFriendID: UUID?
+    @FocusState private var isMessageFocused: Bool
+
+    /// The friend picked on the left, or the first one.
+    private var selectedFriend: PokeService.Friend? {
+        poke.friends.first { $0.id == selectedFriendID } ?? poke.friends.first
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 if let profile = poke.profile {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 5) {
@@ -1250,8 +1283,22 @@ private struct PokeFriendsView: View {
                         .disabled(friendCode.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
 
-                if let error = poke.actionError {
-                    PokeError(message: error)
+                if poke.friends.isEmpty {
+                    Text("Add a friend with their code to poke them.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(poke.friends) { friend in
+                                FriendRow(friend: friend, isSelected: friend.id == selectedFriend?.id, isPoked: poke.justPoked == friend.id) {
+                                    selectedFriendID = friend.id
+                                    isMessageFocused = true
+                                }
+                            }
+                        }
+                    }
+                    .scrollIndicators(.never)
                 }
             }
             .frame(width: 190, alignment: .leading)
@@ -1262,28 +1309,45 @@ private struct PokeFriendsView: View {
                 .padding(.vertical, 2)
 
             VStack(alignment: .leading, spacing: 8) {
-                PokeTextField(placeholder: "Message (optional)", text: $message)
-
-                if poke.friends.isEmpty {
-                    Text("Add a friend with their code to poke them.")
+                HStack(spacing: 6) {
+                    TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message)
+                        .textFieldStyle(.plain)
                         .font(.system(size: 11))
-                        .foregroundColor(.gray)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 10) {
-                            ForEach(poke.friends) { friend in
-                                FriendButton(friend: friend, isPoked: poke.justPoked == friend.id) {
-                                    poke.poke(friend.id, name: friend.name, message: message)
-                                    message = ""
-                                }
-                            }
-                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .focused($isMessageFocused)
+                        .onSubmit(send)
+                        .disabled(selectedFriend == nil)
+                    PokePill(title: "Poke", prominent: true, action: send)
+                        .disabled(selectedFriend == nil)
+                        .opacity(selectedFriend == nil ? 0.4 : 1)
+                }
+
+                if let friend = selectedFriend {
+                    if poke.justPoked == friend.id {
+                        Label("Poked \(friend.name)", systemImage: "hand.point.right.fill")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(pokeColor)
+                    } else {
+                        Text("Press Enter to poke \(friend.name), with or without a message.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.gray)
                     }
-                    .scrollIndicators(.never)
+                }
+
+                if let error = poke.actionError {
+                    PokeError(message: error)
                 }
             }
         }
+    }
+
+    private func send() {
+        guard let friend = selectedFriend else { return }
+        poke.poke(friend.id, name: friend.name, message: message)
+        message = ""
     }
 
     private func addFriend() {
@@ -1292,57 +1356,48 @@ private struct PokeFriendsView: View {
     }
 }
 
-/// A friend's initial in a circle; clicking pokes them. Hovering shows a button to remove them.
-private struct FriendButton: View {
+/// A friend's name; clicking picks them to poke. Hovering shows a button to remove them.
+private struct FriendRow: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
+    let isSelected: Bool
     let isPoked: Bool
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
-        VStack(spacing: 4) {
-            Button(action: action) {
-                ZStack {
-                    Circle()
-                        .fill(isPoked ? pokeColor : Color.white.opacity(isHovered ? 0.2 : 0.12))
-                    if isPoked {
-                        Image(systemName: "hand.point.right.fill")
-                            .font(.system(size: 16))
-                            .symbolEffect(.wiggle, options: .nonRepeating, isActive: true)
-                    } else {
-                        Text(friend.name.prefix(1).uppercased())
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                }
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help("Poke \(friend.name)")
-            .overlay(alignment: .topTrailing) {
-                if isHovered {
-                    Button {
-                        poke.removeFriend(friend)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundColor(.gray)
-                            .background(Circle().fill(Color.black))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove \(friend.name)")
-                    .offset(x: 4, y: -4)
-                }
-            }
-
+        HStack(spacing: 6) {
             Text(friend.name)
-                .font(.system(size: 10))
-                .foregroundColor(.white.opacity(0.8))
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
-                .frame(width: 56)
+            Spacer(minLength: 0)
+            if isPoked {
+                Image(systemName: "hand.point.right.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(pokeColor)
+                    .symbolEffect(.wiggle, options: .nonRepeating, isActive: true)
+            } else if isHovered {
+                Button {
+                    poke.removeFriend(friend)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                }
+                .buttonStyle(.plain)
+                .help("Remove \(friend.name)")
+            }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? pokeColor.opacity(0.35) : Color.white.opacity(isHovered ? 0.1 : 0))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: action)
         .onHover { isHovered = $0 }
+        .help("Poke \(friend.name)")
     }
 }
 

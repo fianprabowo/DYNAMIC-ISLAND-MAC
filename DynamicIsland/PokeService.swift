@@ -96,10 +96,15 @@ class PokeService: ObservableObject {
 
     /// Pokes older than this, caught up after being offline, go to the feed without a banner.
     private let bannerMaxAge: TimeInterval = 10 * 60
+    /// How long to wait before connecting again when the network was down, like right after login.
+    private let retryDelay: TimeInterval = 30
     private let notificationManager = NotificationManager.shared
     private var client: SupabaseClient?
     private var channel: RealtimeChannelV2?
     private var listenTasks: [Task<Void, Never>] = []
+    private var retryTask: Task<Void, Never>?
+    /// Pokes shown since launch; Realtime and catching up can both bring the same one.
+    private var shownPokeIDs: Set<Int> = []
 
     private static let urlKey = "pokeProjectURL"
     private static let keyKey = "pokeAnonKey"
@@ -134,6 +139,7 @@ class PokeService: ObservableObject {
 
     /// Forgets the project and this Mac's sign-in; friends see you only after setting up again.
     func disconnect() {
+        retryTask?.cancel()
         stopListening()
         client = nil
         projectURL = ""
@@ -151,6 +157,7 @@ class PokeService: ObservableObject {
             state = .notConfigured
             return
         }
+        retryTask?.cancel()
         stopListening()
         let client = SupabaseClient(
             supabaseURL: url,
@@ -169,17 +176,34 @@ class PokeService: ObservableObject {
                 }
                 let userID = try await client.auth.session.user.id
                 let profiles: [Profile] = try await client.from("profiles").select("id, name, friend_code").eq("id", value: userID).execute().value
+                // A newer connect, or Change Project, took over meanwhile.
+                guard self.client === client else { return }
                 profile = profiles.first
                 if profile == nil {
                     state = .needsName
                 } else {
                     try await loadFriends()
+                    guard self.client === client else { return }
                     state = .ready
                     listen()
                 }
             } catch {
+                guard self.client === client else { return }
                 state = .failed(Self.describe(error))
+                if Self.isOffline(error) {
+                    retryLater()
+                }
             }
+        }
+    }
+
+    /// The app often starts at login before the network is up; it connects again by itself.
+    private func retryLater() {
+        retryTask?.cancel()
+        retryTask = Task { [weak self, retryDelay] in
+            try? await Task.sleep(for: .seconds(retryDelay))
+            guard !Task.isCancelled, let self, case .failed = state else { return }
+            connect()
         }
     }
 
@@ -188,7 +212,7 @@ class PokeService: ObservableObject {
         guard let client, !name.isEmpty else { return }
         Task {
             do {
-                let profile: Profile = try await client.rpc("set_profile", params: ["new_name": String(name.prefix(40))]).single().execute().value
+                let profile: Profile = try await client.rpc("set_profile", params: ["new_name": Self.limited(name, to: 40)]).single().execute().value
                 let wasReady = state == .ready
                 self.profile = profile
                 actionError = nil
@@ -235,6 +259,13 @@ class PokeService: ObservableObject {
         }
     }
 
+    /// Friends add and remove you from their own Mac, so the list is fetched again when the Poke tab
+    /// opens, after reconnecting, and when someone new pokes.
+    func refreshFriends() {
+        guard state == .ready else { return }
+        Task { try? await loadFriends() }
+    }
+
     private func loadFriends() async throws {
         guard let client else { return }
         friends = try await client.rpc("list_friends").execute().value
@@ -245,7 +276,7 @@ class PokeService: ObservableObject {
     /// Pokes a friend. From a banner's Poke Back the notch confirms it; the Poke tab marks the friend.
     func poke(_ friendID: UUID, name: String, message: String = "", confirmOnNotch: Bool = false) {
         guard let client else { return }
-        let message = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+        let message = Self.limited(message.trimmingCharacters(in: .whitespacesAndNewlines), to: 100)
         Task {
             do {
                 try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message), returning: .minimal).execute()
@@ -260,9 +291,17 @@ class PokeService: ObservableObject {
                     }
                 }
             } catch {
-                actionError = Self.describe(error)
+                // Row level security turns down a poke to someone who removed you.
+                let description: String
+                if let error = error as? PostgrestError, error.code == "42501" {
+                    description = "\(name) isn't your friend anymore"
+                    refreshFriends()
+                } else {
+                    description = Self.describe(error)
+                }
+                actionError = description
                 if confirmOnNotch {
-                    notificationManager.postActivity(AppNotification(type: .poke, title: "Couldn't poke \(name)", body: Self.describe(error)))
+                    notificationManager.postActivity(AppNotification(type: .poke, title: "Couldn't poke \(name)", body: description))
                 }
             }
         }
@@ -309,10 +348,11 @@ class PokeService: ObservableObject {
 
     private func catchUp() async {
         guard let client, let userID = profile?.id else { return }
+        try? await loadFriends()
         guard let lastPokeID else {
             // First time: start after the newest poke, without showing older ones.
             let newest: [Poke] = (try? await client.from("pokes").select().eq("recipient_id", value: userID).order("id", ascending: false).limit(1).execute().value) ?? []
-            self.lastPokeID = newest.first?.id ?? 0
+            self.lastPokeID = max(self.lastPokeID ?? 0, newest.first?.id ?? 0)
             return
         }
         let missed: [Poke] = (try? await client.from("pokes").select().eq("recipient_id", value: userID).gt("id", value: lastPokeID).order("id").limit(20).execute().value) ?? []
@@ -320,8 +360,12 @@ class PokeService: ObservableObject {
     }
 
     private func receive(_ poke: Poke) {
-        guard poke.id > (lastPokeID ?? 0) else { return }
-        lastPokeID = poke.id
+        // A poke that arrived through Realtime while catching up isn't shown twice.
+        guard shownPokeIDs.insert(poke.id).inserted else { return }
+        lastPokeID = max(lastPokeID ?? 0, poke.id)
+        if !friends.contains(where: { $0.id == poke.senderID }) {
+            refreshFriends()
+        }
 
         let title = "\(poke.senderName) poked you"
         let body = poke.message.isEmpty ? "👉" : poke.message
@@ -343,10 +387,19 @@ class PokeService: ObservableObject {
         if let error = error as? AuthError {
             return error.message
         }
-        if error is URLError {
+        if isOffline(error) {
             return "Can't reach Supabase. If the project is paused, restore it in the Supabase dashboard."
         }
         return error.localizedDescription
+    }
+
+    private static func isOffline(_ error: Error) -> Bool {
+        error is URLError || (error as NSError).domain == NSURLErrorDomain
+    }
+
+    /// The database counts characters as Unicode scalars, so an emoji can count as several.
+    private static func limited(_ text: String, to length: Int) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.prefix(length)))
     }
 }
 
