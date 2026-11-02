@@ -73,11 +73,10 @@ class NotificationManager: ObservableObject {
         notifications.filter { !$0.isRead }.count
     }
 
-    private let bannerDuration: TimeInterval = 5
-    /// Banners are shorter while more notifications wait their turn.
-    private let queuedBannerDuration: TimeInterval = 3
-    /// How long a pending banner waits for its notification's details.
-    private let pendingBannerDuration: TimeInterval = 8
+    private let bannerDuration: TimeInterval = 2
+    /// How long a Dock badge rise waits for its notification before it counts as one without. The
+    /// pending banner itself shows only `bannerDuration`; the details drop down again when they arrive.
+    private let badgeRiseTimeout: TimeInterval = 8
     /// This many notifications from one app waiting at once show as one banner.
     private let summaryThreshold = 3
     /// After this many Dock badge rises in a row without a notification (like an app counting
@@ -169,7 +168,7 @@ class NotificationManager: ObservableObject {
     }
 
     /// Shows a banner for another app the moment its Dock badge goes up. Notification Center
-    /// records the notification itself about five seconds later; then `post(fromApp:…)` fills it in.
+    /// records the notification itself about five seconds later; then `post(fromApp:…)` shows it.
     func announce(appBundleID: String, appName: String) {
         let app = appBundleID.lowercased()
         // Apps that badge without notifying (like System Settings for updates) aren't announced.
@@ -179,8 +178,8 @@ class NotificationManager: ObservableObject {
 
         let rise = UUID()
         awaitedBadgeRises[app] = rise
-        Task { [weak self, pendingBannerDuration] in
-            try? await Task.sleep(for: .seconds(pendingBannerDuration))
+        Task { [weak self, badgeRiseTimeout] in
+            try? await Task.sleep(for: .seconds(badgeRiseTimeout))
             guard let self, awaitedBadgeRises[app] == rise else { return }
             awaitedBadgeRises[app] = nil
             unconfirmedBadgeRises[app, default: 0] += 1
@@ -191,7 +190,7 @@ class NotificationManager: ObservableObject {
             return
         }
         let notification = AppNotification(type: .app, title: appName, body: "New notification", appName: appName, appBundleID: appBundleID, isPending: true)
-        showBanner(notification, for: pendingBannerDuration)
+        showBanner(notification, for: bannerDuration)
     }
 
     private func showBanner(_ notification: AppNotification, for duration: TimeInterval) {
@@ -225,10 +224,10 @@ class NotificationManager: ObservableObject {
             bannerQueue.removeAll(where: isFromSameApp)
             let appName = next.appName ?? next.title
             let summary = AppNotification(type: .app, title: appName, body: "\(fromSameApp.count) new notifications", appName: appName, appBundleID: next.appBundleID)
-            showBanner(summary, for: bannerQueue.isEmpty ? bannerDuration : queuedBannerDuration)
+            showBanner(summary, for: bannerDuration)
         } else {
             bannerQueue.removeFirst()
-            showBanner(next, for: bannerQueue.isEmpty ? bannerDuration : queuedBannerDuration)
+            showBanner(next, for: bannerDuration)
         }
     }
 
@@ -237,11 +236,11 @@ class NotificationManager: ObservableObject {
         showNextBanner()
     }
 
-    /// While the pointer rests on the banner it stays; it goes a few seconds after the pointer leaves.
+    /// While the pointer rests on the banner it stays; it goes shortly after the pointer leaves.
     func holdBanner(_ hold: Bool) {
         heldBannerID = hold ? banner?.id : nil
         if !hold, banner != nil {
-            hideBanner(after: 3)
+            hideBanner(after: bannerDuration)
         }
     }
 
