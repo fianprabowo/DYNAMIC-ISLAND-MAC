@@ -26,6 +26,8 @@ class TimerManager: ObservableObject {
     @Published private(set) var pausedRemaining: TimeInterval?
     /// Length of the current countdown, for the progress ring.
     @Published private(set) var duration: TimeInterval = 0
+    /// A plain timer has ended and its sound repeats until the user stops it.
+    @Published private(set) var isRinging = false
     @Published var turnsOnFocus: Bool {
         didSet {
             UserDefaults.standard.set(turnsOnFocus, forKey: Self.turnsOnFocusKey)
@@ -34,23 +36,63 @@ class TimerManager: ObservableObject {
             }
         }
     }
+    /// Name of the macOS system sound played when a countdown ends; empty plays nothing.
+    @Published private(set) var soundName: String
 
     static let focusMinutes = 25
     static let restMinutes = 5
     static let focusOnShortcut = "Dynamic Island Focus On"
     static let focusOffShortcut = "Dynamic Island Focus Off"
+    /// The Clock app's alarm and timer tones (file names without ".m4r"), in alphabetical order.
+    static let tones: [String] = {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: toneFolder)) ?? []
+        return names.filter { $0.hasSuffix(".m4r") }.map { String($0.dropLast(4)) }.sorted()
+    }()
+    private static let toneFolder = "/System/Library/PrivateFrameworks/ToneLibrary.framework/Versions/A/Resources/Ringtones"
+    private static let defaultTone = "Radar"
     private static let turnsOnFocusKey = "timerTurnsOnFocus"
+    private static let soundKey = "timerSoundName"
+    /// How often the alarm checks whether the tone has finished and needs to repeat.
+    private static let alarmInterval: TimeInterval = 0.5
 
     private let notificationManager: NotificationManager
     private var finishTask: Task<Void, Never>?
     private var focusTask: Task<Void, Never>?
+    private var alarmTask: Task<Void, Never>?
+    /// Keeps the tone alive while it plays; NSSound stops when it is released.
+    private var player: NSSound?
+    private var previewPlayer: NSSound?
 
     init(notificationManager: NotificationManager) {
         self.notificationManager = notificationManager
         turnsOnFocus = UserDefaults.standard.bool(forKey: Self.turnsOnFocusKey)
+        let saved = UserDefaults.standard.string(forKey: Self.soundKey)
+        soundName = saved.map { $0.isEmpty || Self.tones.contains($0) ? $0 : Self.defaultTone } ?? Self.defaultTone
     }
 
-    var isActive: Bool { endDate != nil || pausedRemaining != nil }
+    /// Saves the sound that plays when a countdown ends.
+    func setSound(_ name: String) {
+        soundName = name
+        UserDefaults.standard.set(name, forKey: Self.soundKey)
+    }
+
+    /// Plays a tone once without saving it.
+    func preview(_ name: String) {
+        previewPlayer?.stop()
+        previewPlayer = Self.sound(named: name)
+        previewPlayer?.play()
+    }
+
+    /// The tone's name without the "-EncoreInfinitum" suffix some Clock tones carry.
+    static func displayName(_ tone: String) -> String {
+        tone.replacingOccurrences(of: "-EncoreInfinitum", with: "")
+    }
+
+    private static func sound(named tone: String) -> NSSound? {
+        NSSound(contentsOf: URL(fileURLWithPath: "\(toneFolder)/\(tone).m4r"), byReference: true)
+    }
+
+    var isActive: Bool { endDate != nil || pausedRemaining != nil || isRinging }
     var isRunning: Bool { endDate != nil }
 
     func remaining(at date: Date = Date()) -> TimeInterval {
@@ -101,6 +143,7 @@ class TimerManager: ObservableObject {
             setFocus(false)
         }
         finishTask?.cancel()
+        stopRinging()
         endDate = nil
         pausedRemaining = nil
         duration = 0
@@ -111,6 +154,7 @@ class TimerManager: ObservableObject {
         if phase == .focus && newPhase != .focus {
             setFocus(false)
         }
+        stopRinging()
         phase = newPhase
         duration = seconds
         pausedRemaining = nil
@@ -123,7 +167,7 @@ class TimerManager: ObservableObject {
     private func run(until date: Date) {
         endDate = date
         finishTask?.cancel()
-        finishTask = Task { [weak self] in
+        finishTask = Task { @MainActor [weak self] in
             // The continuous clock keeps counting while the Mac sleeps.
             try? await Task.sleep(for: .seconds(date.timeIntervalSinceNow))
             guard !Task.isCancelled else { return }
@@ -132,22 +176,56 @@ class TimerManager: ObservableObject {
     }
 
     private func finish() {
-        let finished = phase
         let minutes = Int((duration / 60).rounded())
-        NSSound(named: "Glass")?.play()
 
-        switch finished {
+        switch phase {
         case .timer:
-            stop()
+            endDate = nil
+            startRinging()
             announce("Timer Done", "\(minutes) min timer")
         case .focus:
+            playSound()
             // Also turns the Focus off.
             begin(.rest, seconds: TimeInterval(Self.restMinutes * 60))
             announce("Focus Done", "Time for a \(Self.restMinutes)-minute break")
         case .rest:
+            playSound()
             stop()
             announce("Break Over", "Ready for the next focus session")
         }
+    }
+
+    /// Plays the chosen tone once from the start.
+    private func playSound() {
+        guard !soundName.isEmpty else { return }
+        player = Self.sound(named: soundName)
+        player?.play()
+    }
+
+    /// Repeats the tone like an alarm until the user stops the timer.
+    private func startRinging() {
+        isRinging = true
+        playSound()
+        alarmTask?.cancel()
+        alarmTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if player?.isPlaying != true {
+                    playSound()
+                }
+                try? await Task.sleep(for: .seconds(Self.alarmInterval))
+            }
+        }
+    }
+
+    private func stopRinging() {
+        alarmTask?.cancel()
+        alarmTask = nil
+        // Only while ringing: a focus or break tone that just started must keep playing.
+        if isRinging {
+            player?.stop()
+        }
+        isRinging = false
     }
 
     private func announce(_ title: String, _ body: String) {

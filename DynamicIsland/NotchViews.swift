@@ -667,6 +667,7 @@ private struct SettingsMenu: View {
 /// A ring with the time left, presets, and Pomodoro (focus, then a break).
 private struct TimerView: View {
     @EnvironmentObject var timerManager: TimerManager
+    @State private var choosingSound = false
 
     private static let presets = [1, 5, 10, 15, 30, 60]
 
@@ -676,37 +677,104 @@ private struct TimerView: View {
                 .frame(width: 104, height: 104)
 
             VStack(alignment: .leading, spacing: 10) {
-                if timerManager.isActive {
-                    HStack(spacing: 8) {
-                        if timerManager.isRunning {
-                            pill("Pause", systemImage: "pause.fill", action: timerManager.pause)
-                        } else {
-                            pill("Resume", systemImage: "play.fill", prominent: true, action: timerManager.resume)
+                if choosingSound {
+                    soundList
+                } else {
+                    if timerManager.isActive {
+                        HStack(spacing: 8) {
+                            if timerManager.isRinging {
+                                pill("Stop", systemImage: "stop.fill", prominent: true, action: timerManager.stop)
+                            } else {
+                                if timerManager.isRunning {
+                                    pill("Pause", systemImage: "pause.fill", action: timerManager.pause)
+                                } else {
+                                    pill("Resume", systemImage: "play.fill", prominent: true, action: timerManager.resume)
+                                }
+                                pill("+1 min", systemImage: "plus", action: timerManager.addMinute)
+                                pill("Stop", systemImage: "stop.fill", action: timerManager.stop)
+                            }
                         }
-                        pill("+1 min", systemImage: "plus", action: timerManager.addMinute)
-                        pill("Stop", systemImage: "stop.fill", action: timerManager.stop)
                     }
-                }
 
-                HStack(spacing: 6) {
-                    ForEach(Self.presets, id: \.self) { minutes in
-                        pill(minutes == 60 ? "1 h" : "\(minutes) m") { timerManager.start(minutes: minutes) }
+                    HStack(spacing: 6) {
+                        ForEach(Self.presets, id: \.self) { minutes in
+                            pill(minutes == 60 ? "1 h" : "\(minutes) m") { timerManager.start(minutes: minutes) }
+                        }
                     }
-                }
 
-                HStack(spacing: 12) {
-                    pill("Pomodoro \(TimerManager.focusMinutes) + \(TimerManager.restMinutes)", systemImage: "brain.head.profile", action: timerManager.startPomodoro)
-                    Toggle("Turn On Focus", isOn: $timerManager.turnsOnFocus)
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .font(.system(size: 10))
-                        .foregroundColor(.gray)
-                        .help("During Pomodoro focus, runs the shortcuts “\(TimerManager.focusOnShortcut)” and “\(TimerManager.focusOffShortcut)”")
+                    HStack(spacing: 12) {
+                        pill("Pomodoro \(TimerManager.focusMinutes) + \(TimerManager.restMinutes)", systemImage: "brain.head.profile", action: timerManager.startPomodoro)
+                        Toggle("Turn On Focus", isOn: $timerManager.turnsOnFocus)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .font(.system(size: 10))
+                            .foregroundColor(.gray)
+                            .help("During Pomodoro focus, runs the shortcuts “\(TimerManager.focusOnShortcut)” and “\(TimerManager.focusOffShortcut)”")
+                    }
+
+                    pill("Sound: \(soundLabel)", systemImage: "speaker.wave.2.fill") { choosingSound = true }
                 }
             }
 
             Spacer(minLength: 0)
         }
+    }
+
+    private var soundLabel: String {
+        timerManager.soundName.isEmpty ? "None" : TimerManager.displayName(timerManager.soundName)
+    }
+
+    /// Every sound with a play button to hear it and a Select button to save it.
+    private var soundList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Timer Sound")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                Spacer()
+                pill("Done") { choosingSound = false }
+            }
+
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach([""] + TimerManager.tones, id: \.self) { name in
+                        soundRow(name)
+                    }
+                }
+            }
+            .frame(height: 130)
+        }
+        .frame(width: 260)
+    }
+
+    private func soundRow(_ name: String) -> some View {
+        HStack(spacing: 8) {
+            Button { timerManager.preview(name) } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 20, height: 20)
+                    .background(Color.white.opacity(0.1))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(name.isEmpty)
+            .opacity(name.isEmpty ? 0.3 : 1)
+
+            Text(name.isEmpty ? "None" : TimerManager.displayName(name))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.white)
+
+            Spacer()
+
+            if timerManager.soundName == name {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(timerColor)
+            } else {
+                pill("Select") { timerManager.setSound(name) }
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     private var ring: some View {
@@ -725,7 +793,7 @@ private struct TimerView: View {
                         .font(.system(size: 20, weight: .bold))
                         .monospacedDigit()
                         .opacity(timerManager.isActive && !timerManager.isRunning ? 0.5 : 1)
-                    Text(timerManager.isActive ? timerManager.phase.title : "Timer")
+                    Text(timerManager.isRinging ? "Time's Up" : timerManager.isActive ? timerManager.phase.title : "Timer")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(.gray)
                 }
