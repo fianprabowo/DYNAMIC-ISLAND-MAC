@@ -1,0 +1,24 @@
+DynamicIsland/NotificationManager.swift
+  s_8d4b63dc56ae38::t_318404245bc719 227,230
+  s_8d4b63dc56ae38::t_dd20aa697e7f62 77-79,181-182,193
+  s_8d4b63dc56ae38::t_2d90018f5e3eff 171
+  s_8d4b63dc56ae38::t_5155bd8292adbe 76,239,243
+README.md
+  s_8d4b63dc56ae38::t_df2b8b5c151d45 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "57c0a39f74714d6b88e3b64f150bd25c2bdc2e5a",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
