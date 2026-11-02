@@ -6,6 +6,7 @@ import SwiftUI
 enum NotchTab: String, CaseIterable {
     case nook = "Nook"
     case alerts = "Alerts"
+    case poke = "Poke"
     case timer = "Timer"
     case system = "System"
 
@@ -13,6 +14,7 @@ enum NotchTab: String, CaseIterable {
         switch self {
         case .nook: return "sparkles"
         case .alerts: return "bell.fill"
+        case .poke: return "hand.point.right.fill"
         case .timer: return "timer"
         case .system: return "chart.bar.fill"
         }

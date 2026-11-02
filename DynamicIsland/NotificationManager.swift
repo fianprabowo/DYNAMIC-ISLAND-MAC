@@ -23,6 +23,9 @@ struct AppNotification: Identifiable, Codable {
     var progress: Double? = nil
     /// An SF Symbol in place of the type's, like the headphones that connected.
     var symbol: String? = nil
+    /// The friend who poked (see PokeService); the banner's action pokes them back.
+    var pokeSenderID: UUID? = nil
+    var pokeSenderName: String? = nil
 
     var icon: String { symbol ?? type.icon }
 }
@@ -30,7 +33,7 @@ struct AppNotification: Identifiable, Codable {
 enum NotificationType: String, CaseIterable, Codable {
     case system, message, warning, reminder, network, app
     /// The island's own live activities (see `NotificationManager.postActivity`).
-    case claude, meeting, power, audio, timer
+    case claude, meeting, power, audio, timer, poke
 
     var icon: String {
         switch self {
@@ -45,6 +48,7 @@ enum NotificationType: String, CaseIterable, Codable {
         case .power: return "battery.100percent.bolt"
         case .audio: return "headphones"
         case .timer: return "timer"
+        case .poke: return "hand.point.right.fill"
         }
     }
 

@@ -1,0 +1,378 @@
+import AppKit
+import Combine
+import Supabase
+
+/// Poke: friends who also run Dynamic Island nudge each other's notch. Pokes go through a Supabase
+/// project the friends share (its tables and rules are in supabase/poke.sql). Each Mac signs in
+/// anonymously, and entering a friend's code makes both of you friends.
+///
+/// The project's URL and anon key are entered in the Poke tab and kept in the user defaults. The
+/// anon key is meant to ship in apps; row level security keeps each person to their own data.
+class PokeService: ObservableObject {
+    static let shared = PokeService()
+
+    enum State: Equatable {
+        case notConfigured
+        case connecting
+        case needsName
+        case ready
+        case failed(String)
+    }
+
+    nonisolated struct Profile: Decodable, Sendable {
+        let id: UUID
+        let name: String
+        let friendCode: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, name
+            case friendCode = "friend_code"
+        }
+    }
+
+    nonisolated struct Friend: Identifiable, Decodable, Hashable, Sendable {
+        let id: UUID
+        let name: String
+    }
+
+    nonisolated struct Poke: Decodable, Sendable {
+        let id: Int
+        let senderID: UUID
+        let senderName: String
+        let message: String
+        let createdAt: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id, message
+            case senderID = "sender_id"
+            case senderName = "sender_name"
+            case createdAt = "created_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(Int.self, forKey: .id)
+            senderID = try container.decode(UUID.self, forKey: .senderID)
+            senderName = try container.decode(String.self, forKey: .senderName)
+            message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+            // Realtime and the REST API format times differently; a poke is shown either way.
+            createdAt = try? container.decode(Date.self, forKey: .createdAt)
+        }
+    }
+
+    private nonisolated struct NewPoke: Encodable, Sendable {
+        let recipientID: UUID
+        let message: String
+
+        enum CodingKeys: String, CodingKey {
+            case recipientID = "recipient_id"
+            case message
+        }
+    }
+
+    @Published private(set) var state: State = .notConfigured
+    @Published private(set) var profile: Profile?
+    @Published private(set) var friends: [Friend] = []
+    /// Whether new pokes arrive right away.
+    @Published private(set) var isListening = false
+    /// The last action's error, like an unknown friend code.
+    @Published var actionError: String?
+    /// The friend just poked from the Poke tab, for a moment.
+    @Published private(set) var justPoked: UUID?
+
+    private(set) var projectURL: String {
+        get { UserDefaults.standard.string(forKey: Self.urlKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: Self.urlKey) }
+    }
+    private(set) var anonKey: String {
+        get { UserDefaults.standard.string(forKey: Self.keyKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: Self.keyKey) }
+    }
+    /// The newest poke already shown; older ones aren't shown again when catching up.
+    private var lastPokeID: Int? {
+        get { UserDefaults.standard.object(forKey: Self.lastPokeKey) as? Int }
+        set { UserDefaults.standard.set(newValue, forKey: Self.lastPokeKey) }
+    }
+
+    /// Pokes older than this, caught up after being offline, go to the feed without a banner.
+    private let bannerMaxAge: TimeInterval = 10 * 60
+    private let notificationManager = NotificationManager.shared
+    private var client: SupabaseClient?
+    private var channel: RealtimeChannelV2?
+    private var listenTasks: [Task<Void, Never>] = []
+
+    private static let urlKey = "pokeProjectURL"
+    private static let keyKey = "pokeAnonKey"
+    private static let lastPokeKey = "pokeLastID"
+    private static let sessionDirectory = URL.applicationSupportDirectory
+        .appending(path: Bundle.main.bundleIdentifier ?? "DynamicIsland", directoryHint: .isDirectory)
+        .appending(path: "Poke", directoryHint: .isDirectory)
+
+    private init() {
+        if !projectURL.isEmpty && !anonKey.isEmpty {
+            connect()
+        }
+    }
+
+    // MARK: Setup
+
+    func configure(projectURL: String, anonKey: String) {
+        let projectURL = projectURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let anonKey = anonKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: projectURL), url.scheme == "https", url.host() != nil else {
+            state = .failed("The project URL looks like https://abcd.supabase.co")
+            return
+        }
+        guard !anonKey.isEmpty else {
+            state = .failed("Paste the project's anon key")
+            return
+        }
+        self.projectURL = projectURL
+        self.anonKey = anonKey
+        connect()
+    }
+
+    /// Forgets the project and this Mac's sign-in; friends see you only after setting up again.
+    func disconnect() {
+        stopListening()
+        client = nil
+        projectURL = ""
+        anonKey = ""
+        lastPokeID = nil
+        try? FileManager.default.removeItem(at: Self.sessionDirectory)
+        profile = nil
+        friends = []
+        actionError = nil
+        state = .notConfigured
+    }
+
+    func connect() {
+        guard let url = URL(string: projectURL) else {
+            state = .notConfigured
+            return
+        }
+        stopListening()
+        let client = SupabaseClient(
+            supabaseURL: url,
+            supabaseKey: anonKey,
+            options: SupabaseClientOptions(auth: .init(storage: FileAuthStorage(directory: Self.sessionDirectory), emitLocalSessionAsInitialSession: true))
+        )
+        self.client = client
+        state = .connecting
+
+        Task {
+            do {
+                // Only a Mac without a session signs up; one whose token can't refresh right now
+                // (offline) keeps its identity and fails instead.
+                if client.auth.currentSession == nil {
+                    try await client.auth.signInAnonymously()
+                }
+                let userID = try await client.auth.session.user.id
+                let profiles: [Profile] = try await client.from("profiles").select("id, name, friend_code").eq("id", value: userID).execute().value
+                profile = profiles.first
+                if profile == nil {
+                    state = .needsName
+                } else {
+                    try await loadFriends()
+                    state = .ready
+                    listen()
+                }
+            } catch {
+                state = .failed(Self.describe(error))
+            }
+        }
+    }
+
+    func setName(_ name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let client, !name.isEmpty else { return }
+        Task {
+            do {
+                let profile: Profile = try await client.rpc("set_profile", params: ["new_name": String(name.prefix(40))]).single().execute().value
+                let wasReady = state == .ready
+                self.profile = profile
+                actionError = nil
+                if !wasReady {
+                    try await loadFriends()
+                    state = .ready
+                    listen()
+                }
+            } catch {
+                actionError = Self.describe(error)
+            }
+        }
+    }
+
+    // MARK: Friends
+
+    func addFriend(code: String) {
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard let client, !code.isEmpty else { return }
+        Task {
+            do {
+                let friend: Friend = try await client.rpc("add_friend", params: ["code": code]).single().execute().value
+                if !friends.contains(friend) {
+                    friends.append(friend)
+                    friends.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                }
+                actionError = nil
+            } catch {
+                actionError = Self.describe(error)
+            }
+        }
+    }
+
+    func removeFriend(_ friend: Friend) {
+        guard let client else { return }
+        Task {
+            do {
+                try await client.rpc("remove_friend", params: ["friend": friend.id.uuidString]).execute()
+                friends.removeAll { $0.id == friend.id }
+                actionError = nil
+            } catch {
+                actionError = Self.describe(error)
+            }
+        }
+    }
+
+    private func loadFriends() async throws {
+        guard let client else { return }
+        friends = try await client.rpc("list_friends").execute().value
+    }
+
+    // MARK: Poking
+
+    /// Pokes a friend. From a banner's Poke Back the notch confirms it; the Poke tab marks the friend.
+    func poke(_ friendID: UUID, name: String, message: String = "", confirmOnNotch: Bool = false) {
+        guard let client else { return }
+        let message = String(message.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+        Task {
+            do {
+                try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message), returning: .minimal).execute()
+                actionError = nil
+                if confirmOnNotch {
+                    notificationManager.postActivity(AppNotification(type: .poke, title: "Poked \(name)", body: message))
+                } else {
+                    justPoked = friendID
+                    try? await Task.sleep(for: .seconds(1.5))
+                    if justPoked == friendID {
+                        justPoked = nil
+                    }
+                }
+            } catch {
+                actionError = Self.describe(error)
+                if confirmOnNotch {
+                    notificationManager.postActivity(AppNotification(type: .poke, title: "Couldn't poke \(name)", body: Self.describe(error)))
+                }
+            }
+        }
+    }
+
+    /// New pokes arrive through Realtime; after (re)connecting, the ones missed while offline are
+    /// fetched too.
+    private func listen() {
+        guard let client, let userID = profile?.id else { return }
+        stopListening()
+        let channel = client.channel("pokes:\(userID.uuidString.lowercased())")
+        let inserts = channel.postgresChange(InsertAction.self, table: "pokes", filter: .eq("recipient_id", value: userID))
+        self.channel = channel
+
+        listenTasks.append(Task { [weak self] in
+            for await status in channel.statusChange {
+                self?.isListening = status == .subscribed
+                if status == .subscribed {
+                    await self?.catchUp()
+                }
+            }
+        })
+        listenTasks.append(Task { [weak self] in
+            for await insert in inserts {
+                if let poke = try? insert.decodeRecord(as: Poke.self, decoder: PostgrestClient.Configuration.jsonDecoder) {
+                    self?.receive(poke)
+                }
+            }
+        })
+        listenTasks.append(Task {
+            try? await channel.subscribeWithError()
+        })
+    }
+
+    private func stopListening() {
+        listenTasks.forEach { $0.cancel() }
+        listenTasks = []
+        if let channel, let client {
+            Task { await client.removeChannel(channel) }
+        }
+        channel = nil
+        isListening = false
+    }
+
+    private func catchUp() async {
+        guard let client, let userID = profile?.id else { return }
+        guard let lastPokeID else {
+            // First time: start after the newest poke, without showing older ones.
+            let newest: [Poke] = (try? await client.from("pokes").select().eq("recipient_id", value: userID).order("id", ascending: false).limit(1).execute().value) ?? []
+            self.lastPokeID = newest.first?.id ?? 0
+            return
+        }
+        let missed: [Poke] = (try? await client.from("pokes").select().eq("recipient_id", value: userID).gt("id", value: lastPokeID).order("id").limit(20).execute().value) ?? []
+        missed.forEach(receive)
+    }
+
+    private func receive(_ poke: Poke) {
+        guard poke.id > (lastPokeID ?? 0) else { return }
+        lastPokeID = poke.id
+
+        let title = "\(poke.senderName) poked you"
+        let body = poke.message.isEmpty ? "👉" : poke.message
+        if let createdAt = poke.createdAt, Date().timeIntervalSince(createdAt) > bannerMaxAge {
+            notificationManager.post(.poke, title: title, body: body)
+            return
+        }
+        let notification = AppNotification(type: .poke, title: title, body: body, actionTitle: "Poke Back", pokeSenderID: poke.senderID, pokeSenderName: poke.senderName)
+        notificationManager.postActivity(notification, keepInFeed: true)
+        if !FocusStatus.isActive {
+            NSSound(named: "Pop")?.play()
+        }
+    }
+
+    private static func describe(_ error: Error) -> String {
+        if let error = error as? PostgrestError {
+            return error.message
+        }
+        if let error = error as? AuthError {
+            return error.message
+        }
+        if error is URLError {
+            return "Can't reach Supabase. If the project is paused, restore it in the Supabase dashboard."
+        }
+        return error.localizedDescription
+    }
+}
+
+/// Keeps the Supabase sign-in in a file only the user can read. The keychain would ask for access
+/// again after every build of an ad hoc signed app.
+nonisolated struct FileAuthStorage: AuthLocalStorage {
+    let directory: URL
+
+    func store(key: String, value: Data) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let url = file(for: key)
+        try? FileManager.default.removeItem(at: url)
+        guard FileManager.default.createFile(atPath: url.path, contents: value, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
+
+    func retrieve(key: String) throws -> Data? {
+        try? Data(contentsOf: file(for: key))
+    }
+
+    func remove(key: String) throws {
+        try? FileManager.default.removeItem(at: file(for: key))
+    }
+
+    private func file(for key: String) -> URL {
+        directory.appending(path: key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "session")
+    }
+}

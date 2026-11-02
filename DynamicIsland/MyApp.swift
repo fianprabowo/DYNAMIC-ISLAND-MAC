@@ -33,6 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let headphonesWatcher = HeadphonesWatcher(notificationManager: .shared)
     let hudMonitor = HUDMonitor()
     let timerManager = TimerManager(notificationManager: .shared)
+    let pokeService = PokeService.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -82,6 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(claudeUsageMonitor)
                     .environmentObject(hudMonitor)
                     .environmentObject(timerManager)
+                    .environmentObject(pokeService)
             )
         )
 
@@ -554,4 +556,5 @@ struct SettingsView: View {
         .environmentObject(ClaudeUsageMonitor())
         .environmentObject(HUDMonitor())
         .environmentObject(TimerManager(notificationManager: .shared))
+        .environmentObject(PokeService.shared)
 }
