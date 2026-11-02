@@ -20,9 +20,10 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
   Only Claude Code's prompts are also kept in the Alerts tab. During a Focus, meeting reminders and Claude Code's prompts wait in the Alerts tab instead of dropping down; charging, headphones and timers show anyway.
 - **Volume and brightness on the notch.** While the volume or the built-in display's brightness changes, wider wings beside the notch show the level (not over a notification banner). macOS's own indicator still shows too. Turn it off with *Show Volume & Brightness* in the settings menu.
 - **Notifications on the notch.** When another app posts a notification, the notch drops down for a few seconds with the app's icon, title and message. Click it to open the app. Notifications that arrive together show one after another; three or more from one app show as one banner ("Slack · 3 new notifications"). While a Focus such as Do Not Disturb is on, the notch stays quiet and notifications only go to the Alerts tab.
-- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has four tabs:
+- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has five tabs:
   - **Nook:** now playing with controls, a calendar week strip with events, and Claude usage (plan limits left plus tokens today).
   - **Alerts:** every notification, from the app and from other apps. Remove them one by one or clear them all. The latest 50 are kept, also across restarts, in `~/Library/Application Support/<bundle id>/notifications.json` (message text included).
+  - **Poke:** friends who also run Dynamic Island. Click a friend to poke them, with an optional short message: their notch drops down with "Alfian poked you" and a *Poke Back* button, and a sound plays. Needs a shared Supabase project (see [Poke](#poke)).
   - **Timer:** a countdown with presets (1 minute to 1 hour), pause, +1 minute and stop, and Pomodoro: 25 minutes of focus, then a 5-minute break that starts on its own. A sound plays when it ends. With *Turn On Focus*, Pomodoro turns a Focus on for the focus part (see [Focus during Pomodoro](#focus-during-pomodoro)).
   - **System:** battery, CPU, memory, network and temperatures.
 
@@ -37,10 +38,10 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
 
 ## Build and run
 
-Open `DynamicIsland.xcodeproj` in Xcode and run the `MyApp` scheme. You can also build it from the command line:
+Open `DynamicIsland.xcodeproj` in Xcode and run the `DynamicIsland` scheme. You can also build it from the command line:
 
 ```sh
-xcodebuild -scheme MyApp -configuration Release -derivedDataPath build build
+xcodebuild -scheme DynamicIsland -configuration Release -derivedDataPath build build
 ditto "build/Build/Products/Release/Dynamic Island.app" "/Applications/Dynamic Island.app"
 open "/Applications/Dynamic Island.app"
 ```
@@ -101,6 +102,23 @@ A Claude Code hook tells the app when Claude needs you or has finished. To set i
    ```
 
 The script appends each event to `~/Library/Application Support/DynamicIsland/claude-events.jsonl`, where the app reads it: the event, Claude's short message (like "Claude needs your permission to use Bash"), the project folder and the terminal app, never the conversation. It starts the file over once it passes 64 KB, never prints anything and always succeeds, so it can't get in Claude Code's way.
+
+## Poke
+
+Pokes travel through a [Supabase](https://supabase.com) project that you and your friends share. The free plan is enough. One person sets it up:
+
+1. Create a project on supabase.com.
+2. In *Authentication → Sign In / Providers*, turn on **Allow anonymous sign-ins**. Each Mac signs in anonymously; there are no accounts or passwords.
+3. In the *SQL Editor*, run [`supabase/poke.sql`](supabase/poke.sql). It creates the tables and the rules that keep everyone to their own data.
+4. In *Project Settings → API Keys*, copy the project URL and the anon (or publishable) key.
+
+Then everyone, on their own Mac: open the notch's **Poke** tab, paste the URL and key, click *Connect* and enter a name. Each person gets a friend code like `K7QX-M2PA`; entering a friend's code makes you friends both ways. Share the URL and key privately with friends (not in this repo): the key is meant to ship in apps, but it lets anyone who has it sign up to your project.
+
+- What's stored: in Supabase, each person's name and friend code, who is friends with whom, and pokes (sender, recipient, message) for a week. On the Mac, the URL and key in the app's preferences and the sign-in in `~/Library/Application Support/<bundle id>/Poke/`, readable by the user only.
+- Pokes arrive right away while the app runs. Pokes sent while it was off show when it comes back; those older than 10 minutes go only to the Alerts tab.
+- At most 10 pokes a minute per person, and messages up to 100 characters.
+- Supabase pauses free projects after about a week without use. If the Poke tab says it can't reach Supabase, restore the project in the dashboard.
+- *Change Project* forgets the project and this Mac's sign-in. Setting up again makes a new friend code, so friends have to add you again.
 
 ## Focus during Pomodoro
 

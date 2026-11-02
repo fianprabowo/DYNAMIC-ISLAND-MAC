@@ -6,15 +6,19 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		000000000000000000000152 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000151 /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
-		000000000000000000000120 /* MyApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000120 /* Dynamic Island.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dynamic Island.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000130 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		000000000000000000000010 /* MyApp */ = {
+		000000000000000000000010 /* DynamicIsland */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MyApp;
+			path = DynamicIsland;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +27,7 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				000000000000000000000152 /* Supabase in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -31,7 +36,7 @@
 		000000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000010 /* MyApp */,
+				000000000000000000000010 /* DynamicIsland */,
 				000000000000000000000130 /* Signing.xcconfig */,
 				000000000000000000000020 /* Products */,
 			);
@@ -40,7 +45,7 @@
 		000000000000000000000020 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000120 /* MyApp.app */,
+				000000000000000000000120 /* Dynamic Island.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +53,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		000000000000000100000000 /* MyApp */ = {
+		000000000000000100000000 /* DynamicIsland */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 000000000000000110000000 /* Build configuration list for PBXNativeTarget "MyApp" */;
+			buildConfigurationList = 000000000000000110000000 /* Build configuration list for PBXNativeTarget "DynamicIsland" */;
 			buildPhases = (
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
@@ -59,11 +64,14 @@
 			buildRules = (
 			);
 			fileSystemSynchronizedGroups = (
-				000000000000000000000010 /* MyApp */,
+				000000000000000000000010 /* DynamicIsland */,
 			);
-			name = MyApp;
+			name = DynamicIsland;
+			packageProductDependencies = (
+				000000000000000000000151 /* Supabase */,
+			);
 			productName = MyApp;
-			productReference = 000000000000000000000120 /* MyApp.app */;
+			productReference = 000000000000000000000120 /* Dynamic Island.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -90,12 +98,15 @@
 			);
 			mainGroup = 000000000000000000000001;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				000000000000000000000150 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				000000000000000100000000 /* MyApp */,
+				000000000000000100000000 /* DynamicIsland */,
 			);
 		};
 /* End PBXProject section */
@@ -249,7 +260,7 @@
 			};
 			name = Release;
 		};
-		000000000000000111000000 /* Debug configuration for PBXNativeTarget "MyApp" */ = {
+		000000000000000111000000 /* Debug configuration for PBXNativeTarget "DynamicIsland" */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 000000000000000000000130 /* Signing.xcconfig */;
 			buildSettings = {
@@ -289,7 +300,7 @@
 			};
 			name = Debug;
 		};
-		000000000000000112000000 /* Release configuration for PBXNativeTarget "MyApp" */ = {
+		000000000000000112000000 /* Release configuration for PBXNativeTarget "DynamicIsland" */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 000000000000000000000130 /* Signing.xcconfig */;
 			buildSettings = {
@@ -340,15 +351,34 @@
 			);
 			defaultConfigurationName = Release;
 		};
-		000000000000000110000000 /* Build configuration list for PBXNativeTarget "MyApp" */ = {
+		000000000000000110000000 /* Build configuration list for PBXNativeTarget "DynamicIsland" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000111000000 /* Debug configuration for PBXNativeTarget "MyApp" */,
-				000000000000000112000000 /* Release configuration for PBXNativeTarget "MyApp" */,
+				000000000000000111000000 /* Debug configuration for PBXNativeTarget "DynamicIsland" */,
+				000000000000000112000000 /* Release configuration for PBXNativeTarget "DynamicIsland" */,
 			);
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		000000000000000000000150 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.55.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		000000000000000000000151 /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 000000000000000000000150 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 000000000000000000000000 /* Project object */;
 }

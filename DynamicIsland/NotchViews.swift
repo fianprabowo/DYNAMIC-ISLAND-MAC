@@ -195,7 +195,7 @@ private struct NotchBannerView: View {
             Spacer(minLength: 0)
 
             if let actionTitle = notification.actionTitle {
-                Button(action: open) {
+                Button(action: performAction) {
                     Text(actionTitle)
                         .font(.system(size: 11, weight: .semibold))
                         .padding(.horizontal, 12)
@@ -218,7 +218,21 @@ private struct NotchBannerView: View {
     }
 
     private func open() {
-        notification.open()
+        if notification.type == .poke {
+            layout.selectedTab = .poke
+            layout.expand()
+        } else {
+            notification.open()
+        }
+        notificationManager.dismissBanner()
+    }
+
+    private func performAction() {
+        if let friendID = notification.pokeSenderID {
+            PokeService.shared.poke(friendID, name: notification.pokeSenderName ?? "", confirmOnNotch: true)
+        } else {
+            notification.open()
+        }
         notificationManager.dismissBanner()
     }
 }
@@ -237,11 +251,13 @@ private struct NotificationIcon: View {
             Image(systemName: notification.icon)
                 .font(.system(size: symbolSize))
                 .foregroundColor(notificationTint(notification.type, themeManager))
+                .symbolEffect(.wiggle, options: .repeat(3), isActive: notification.type == .poke)
         }
     }
 }
 
 private let timerColor = Color.orange
+private let pokeColor = Color.pink
 
 private func notificationTint(_ type: NotificationType, _ themeManager: ThemeManager) -> Color {
     switch type {
@@ -250,6 +266,7 @@ private func notificationTint(_ type: NotificationType, _ themeManager: ThemeMan
     case .power: return .green
     case .audio: return .white
     case .timer: return timerColor
+    case .poke: return pokeColor
     default: return Color(themeManager.currentTheme.accentColor)
     }
 }
@@ -401,6 +418,8 @@ private struct NotchExpandedView: View {
                     }
                 case .alerts:
                     AlertsView()
+                case .poke:
+                    PokeView()
                 case .timer:
                     TimerView()
                 case .system:
@@ -1093,5 +1112,283 @@ private struct ClaudeWorkingIcon: View {
     var body: some View {
         PulsingSymbol(systemName: "sparkle", color: claudeOrangeNS, pointSize: 13)
             .frame(width: 20, height: 20)
+    }
+}
+
+// MARK: - Poke
+/// Friends who also run Dynamic Island: click one to poke their notch. Setting up takes the shared
+/// Supabase project's URL and anon key, then your name; friends are added with their code.
+private struct PokeView: View {
+    @EnvironmentObject var poke: PokeService
+
+    var body: some View {
+        Group {
+            switch poke.state {
+            case .notConfigured:
+                PokeSetupView()
+            case .connecting:
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .needsName:
+                PokeNameView()
+            case .ready:
+                PokeFriendsView()
+            case .failed(let message):
+                VStack(spacing: 8) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .multilineTextAlignment(.center)
+                    HStack(spacing: 8) {
+                        PokePill(title: "Try Again", prominent: true, action: poke.connect)
+                        PokePill(title: "Change Project", action: poke.disconnect)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+private struct PokeSetupView: View {
+    @EnvironmentObject var poke: PokeService
+    @State private var projectURL = ""
+    @State private var anonKey = ""
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Poke your friends")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Connect the Supabase project you share with them (run supabase/poke.sql there first). Everyone uses the same URL and anon key.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 220, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 6) {
+                PokeTextField(placeholder: "Project URL (https://….supabase.co)", text: $projectURL)
+                PokeTextField(placeholder: "Anon or publishable key", text: $anonKey)
+                PokePill(title: "Connect", prominent: true) {
+                    poke.configure(projectURL: projectURL, anonKey: anonKey)
+                }
+                .disabled(projectURL.isEmpty || anonKey.isEmpty)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct PokeNameView: View {
+    @EnvironmentObject var poke: PokeService
+    @State private var name = NSFullUserName().components(separatedBy: " ").first ?? ""
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("What should friends see when you poke them?")
+                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 8) {
+                PokeTextField(placeholder: "Your name", text: $name, onSubmit: save)
+                    .frame(width: 200)
+                PokePill(title: "Save", prominent: true, action: save)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let error = poke.actionError {
+                PokeError(message: error)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func save() {
+        poke.setName(name)
+    }
+}
+
+private struct PokeFriendsView: View {
+    @EnvironmentObject var poke: PokeService
+    @State private var friendCode = ""
+    @State private var message = ""
+    @State private var copied = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let profile = poke.profile {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(poke.isListening ? Color.green : Color.gray)
+                                .frame(width: 6, height: 6)
+                                .help(poke.isListening ? "Receiving pokes" : "Connecting…")
+                            Text(profile.name)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(profile.friendCode, forType: .string)
+                            copied = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(profile.friendCode)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                    .font(.system(size: 9))
+                            }
+                            .foregroundColor(.gray)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Your friend code: send it to a friend to add you")
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    PokeTextField(placeholder: "Friend's code", text: $friendCode, onSubmit: addFriend)
+                    PokePill(title: "Add", action: addFriend)
+                        .disabled(friendCode.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+
+                if let error = poke.actionError {
+                    PokeError(message: error)
+                }
+            }
+            .frame(width: 190, alignment: .leading)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(width: 1)
+                .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 8) {
+                PokeTextField(placeholder: "Message (optional)", text: $message)
+
+                if poke.friends.isEmpty {
+                    Text("Add a friend with their code to poke them.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 10) {
+                            ForEach(poke.friends) { friend in
+                                FriendButton(friend: friend, isPoked: poke.justPoked == friend.id) {
+                                    poke.poke(friend.id, name: friend.name, message: message)
+                                    message = ""
+                                }
+                            }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                }
+            }
+        }
+    }
+
+    private func addFriend() {
+        poke.addFriend(code: friendCode)
+        friendCode = ""
+    }
+}
+
+/// A friend's initial in a circle; clicking pokes them. Hovering shows a button to remove them.
+private struct FriendButton: View {
+    @EnvironmentObject var poke: PokeService
+    let friend: PokeService.Friend
+    let isPoked: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Button(action: action) {
+                ZStack {
+                    Circle()
+                        .fill(isPoked ? pokeColor : Color.white.opacity(isHovered ? 0.2 : 0.12))
+                    if isPoked {
+                        Image(systemName: "hand.point.right.fill")
+                            .font(.system(size: 16))
+                            .symbolEffect(.wiggle, options: .nonRepeating, isActive: true)
+                    } else {
+                        Text(friend.name.prefix(1).uppercased())
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Poke \(friend.name)")
+            .overlay(alignment: .topTrailing) {
+                if isHovered {
+                    Button {
+                        poke.removeFriend(friend)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.gray)
+                            .background(Circle().fill(Color.black))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove \(friend.name)")
+                    .offset(x: 4, y: -4)
+                }
+            }
+
+            Text(friend.name)
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.8))
+                .lineLimit(1)
+                .frame(width: 56)
+        }
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct PokeTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    var onSubmit: () -> Void = {}
+
+    var body: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 11))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .onSubmit(onSubmit)
+    }
+}
+
+private struct PokePill: View {
+    let title: String
+    var prominent = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(prominent ? pokeColor : Color.white.opacity(0.1))
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PokeError: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.system(size: 10))
+            .foregroundColor(.orange)
+            .lineLimit(2)
     }
 }
