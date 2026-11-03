@@ -77,8 +77,9 @@ class PokeService: ObservableObject {
     @Published private(set) var isListening = false
     /// The last action's error, like an unknown friend code.
     @Published var actionError: String?
-    /// The friend just poked from the Poke tab, for a moment.
+    /// The friend being poked from the Poke tab, until Supabase answers.
     @Published private(set) var justPoked: UUID?
+    private var justPokedSending: UUID?
 
     private(set) var projectURL: String {
         get { UserDefaults.standard.string(forKey: Self.urlKey) ?? "" }
@@ -105,6 +106,9 @@ class PokeService: ObservableObject {
     private var retryTask: Task<Void, Never>?
     /// Pokes shown since launch; Realtime and catching up can both bring the same one.
     private var shownPokeIDs: Set<Int> = []
+
+    /// A poke's banner text when it came without a message.
+    static let emptyMessageBody = "👉"
 
     private static let urlKey = "pokeProjectURL"
     private static let keyKey = "pokeAnonKey"
@@ -273,22 +277,29 @@ class PokeService: ObservableObject {
 
     // MARK: Poking
 
-    /// Pokes a friend. From a banner's Poke Back the notch confirms it; the Poke tab marks the friend.
+    /// Pokes a friend. From a banner's Poke Back the notch confirms it once sent; the Poke tab marks
+    /// the friend from the click until Supabase answers, and shows an error if it didn't go through.
     func poke(_ friendID: UUID, name: String, message: String = "", confirmOnNotch: Bool = false) {
         guard let client else { return }
         let message = Self.limited(message.trimmingCharacters(in: .whitespacesAndNewlines), to: 100)
+        // A newer poke to the same friend keeps the mark until its own answer.
+        let sending = UUID()
+        if !confirmOnNotch {
+            justPoked = friendID
+            justPokedSending = sending
+        }
         Task {
+            defer {
+                if justPokedSending == sending {
+                    justPoked = nil
+                    justPokedSending = nil
+                }
+            }
             do {
                 try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message), returning: .minimal).execute()
                 actionError = nil
                 if confirmOnNotch {
                     notificationManager.postActivity(AppNotification(type: .poke, title: "Poked \(name)", body: message))
-                } else {
-                    justPoked = friendID
-                    try? await Task.sleep(for: .seconds(1.5))
-                    if justPoked == friendID {
-                        justPoked = nil
-                    }
                 }
             } catch {
                 // Row level security turns down a poke to someone who removed you.
@@ -368,7 +379,7 @@ class PokeService: ObservableObject {
         }
 
         let title = "\(poke.senderName) poked you"
-        let body = poke.message.isEmpty ? "👉" : poke.message
+        let body = poke.message.isEmpty ? Self.emptyMessageBody : poke.message
         if let createdAt = poke.createdAt, Date().timeIntervalSince(createdAt) > bannerMaxAge {
             notificationManager.post(.poke, title: title, body: body)
             return

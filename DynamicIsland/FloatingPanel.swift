@@ -332,6 +332,11 @@ class FloatingPanel: NSPanel {
                 return
             }
             guard !self.frame.contains(NSEvent.mouseLocation) else { return }
+            // Text being typed, like a reply to a poke, isn't lost when the pointer wanders off;
+            // a click elsewhere still closes it.
+            if self.isKeyWindow, let editor = self.firstResponder as? NSTextView, !editor.string.isEmpty {
+                return
+            }
             self.layout.collapse()
         }
         hoverCloseWorkItem = work

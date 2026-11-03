@@ -73,7 +73,7 @@ class NotificationManager: ObservableObject {
         notifications.filter { !$0.isRead }.count
     }
 
-    private let bannerDuration: TimeInterval = 2
+    private let bannerDuration: TimeInterval = 3
     /// How long a Dock badge rise waits for its notification before it counts as one without. The
     /// pending banner itself shows only `bannerDuration`; the details drop down again when they arrive.
     private let badgeRiseTimeout: TimeInterval = 8

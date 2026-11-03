@@ -156,18 +156,55 @@ struct NotchIslandView: View {
 // MARK: - Notification Banner
 /// Another app's notification, or one of the island's own activities, below the notch. Clicking it
 /// opens its link or its app. While the panel is open it shows inside it instead (`isInPanel`).
+/// A friend's poke is answered right on the banner: Reply turns it into a message field.
 private struct NotchBannerView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var notificationManager: NotificationManager
     @EnvironmentObject var themeManager: ThemeManager
+    @Environment(\.controlActiveState) private var controlActiveState
     let notification: AppNotification
     var isInPanel = false
+    @State private var isReplying = false
+    @State private var reply = ""
+    @FocusState private var isReplyFocused: Bool
 
     private var appName: String {
         notification.appName ?? ""
     }
 
     var body: some View {
+        Group {
+            if isReplying {
+                replyRow
+            } else {
+                notificationRow
+            }
+        }
+        .padding(.horizontal, isInPanel ? 12 : 18)
+        // The top of the island sits behind the physical notch.
+        .padding(.top, isInPanel ? 8 : layout.notchSize.height + 4)
+        .padding(.bottom, 8)
+        .contentShape(Rectangle())
+        // While replying the banner stays wherever the pointer goes.
+        .onHover { hovering in
+            if !isReplying {
+                notificationManager.holdBanner(hovering)
+            }
+        }
+        .onTapGesture {
+            if !isReplying {
+                open()
+            }
+        }
+        // Clicking elsewhere before typing anything lets the banner go.
+        .onChange(of: controlActiveState) { previous, state in
+            if previous == .key && state != .key && reply.isEmpty {
+                cancelReply()
+            }
+        }
+    }
+
+    private var notificationRow: some View {
         HStack(spacing: 10) {
             NotificationIcon(notification: notification, symbolSize: 20)
                 .frame(width: 34, height: 34)
@@ -195,6 +232,20 @@ private struct NotchBannerView: View {
 
             Spacer(minLength: 0)
 
+            if notification.pokeSenderID != nil {
+                Button(action: startReply) {
+                    Text("Reply")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.15))
+                        .clipShape(Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Write \(senderName) a message")
+            }
+
             if let actionTitle = notification.actionTitle {
                 Button(action: performAction) {
                     Text(actionTitle)
@@ -209,32 +260,91 @@ private struct NotchBannerView: View {
                 .help(notification.url?.absoluteString ?? "")
             }
         }
-        .padding(.horizontal, isInPanel ? 12 : 18)
-        // The top of the island sits behind the physical notch.
-        .padding(.top, isInPanel ? 8 : layout.notchSize.height + 4)
-        .padding(.bottom, 8)
-        .contentShape(Rectangle())
-        .onHover { notificationManager.holdBanner($0) }
-        .onTapGesture(perform: open)
     }
 
+    /// The poke being answered above a message field; Enter sends it, Escape cancels.
+    private var replyRow: some View {
+        HStack(spacing: 10) {
+            NotificationIcon(notification: notification, symbolSize: 20)
+                .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(notification.body == PokeService.emptyMessageBody ? notification.title : "\(senderName): \(notification.body)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.gray)
+                    .lineLimit(1)
+                TextField("Reply to \(senderName)", text: $reply)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .focused($isReplyFocused)
+                    .onSubmit(sendReply)
+                    .onExitCommand(perform: cancelReply)
+            }
+
+            Button(action: sendReply) {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(pokeColor))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Send to \(senderName)")
+        }
+    }
+
+    private var senderName: String {
+        notification.pokeSenderName ?? "them"
+    }
+
+    /// A friend's poke is replied to on the banner; anything else opens.
     private func open() {
-        if notification.type == .poke {
+        if notification.pokeSenderID != nil {
+            startReply()
+        } else if notification.type == .poke {
             layout.selectedTab = .poke
             layout.expand()
+            notificationManager.dismissBanner()
         } else {
             notification.open()
+            notificationManager.dismissBanner()
         }
-        notificationManager.dismissBanner()
     }
 
     private func performAction() {
         if let friendID = notification.pokeSenderID {
-            PokeService.shared.poke(friendID, name: notification.pokeSenderName ?? "", confirmOnNotch: true)
+            PokeService.shared.poke(friendID, name: senderName, confirmOnNotch: true)
         } else {
             notification.open()
         }
         notificationManager.dismissBanner()
+    }
+
+    private func startReply() {
+        notificationManager.holdBanner(true)
+        isReplying = true
+        Task {
+            // Once the field is on screen.
+            try? await Task.sleep(for: .milliseconds(50))
+            isReplyFocused = true
+        }
+    }
+
+    private func sendReply() {
+        guard let friendID = notification.pokeSenderID else { return }
+        PokeService.shared.poke(friendID, name: senderName, message: reply, confirmOnNotch: true)
+        notificationManager.dismissBanner()
+    }
+
+    private func cancelReply() {
+        guard isReplying else { return }
+        isReplying = false
+        reply = ""
+        notificationManager.holdBanner(false)
     }
 }
 
@@ -1309,9 +1419,10 @@ private struct PokeFriendsView: View {
     @State private var selectedFriendID: UUID?
     @FocusState private var isMessageFocused: Bool
 
-    /// The friend picked on the left, or the first one.
+    /// The friend picked on the left, otherwise the first one.
     private var selectedFriend: PokeService.Friend? {
-        poke.friends.first { $0.id == selectedFriendID } ?? poke.friends.first
+        guard let selectedFriendID else { return poke.friends.first }
+        return poke.friends.first { $0.id == selectedFriendID }
     }
 
     var body: some View {
@@ -1376,40 +1487,51 @@ private struct PokeFriendsView: View {
                 .frame(width: 1)
                 .padding(.vertical, 2)
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 10) {
+                    TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message, axis: .vertical)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 11))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
+                        .font(.system(size: 12))
+                        .lineLimit(4, reservesSpace: true)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                         .background(Color.white.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                         .focused($isMessageFocused)
                         .onSubmit(send)
                         .disabled(selectedFriend == nil)
-                    PokePill(title: "Poke", prominent: true, action: send)
-                        .disabled(selectedFriend == nil)
-                        .opacity(selectedFriend == nil ? 0.4 : 1)
-                }
 
-                if let friend = selectedFriend {
-                    if poke.justPoked == friend.id {
-                        Label("Poked \(friend.name)", systemImage: "hand.point.right.fill")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(pokeColor)
-                    } else {
-                        Text("Press Enter to poke \(friend.name), with or without a message.")
-                            .font(.system(size: 10))
-                            .foregroundColor(.gray)
+                    Button(action: send) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "hand.point.right.fill")
+                                .font(.system(size: 20))
+                            Text("Poke")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .frame(width: 84)
+                        .frame(maxHeight: .infinity)
+                        // Green from the click until Supabase has the poke.
+                        .background(justPokedSelected ? Color.green : pokeColor)
+                        .animation(.easeInOut(duration: 0.08), value: justPokedSelected)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
                     }
+                    .buttonStyle(.plain)
+                    .disabled(selectedFriend == nil)
+                    .opacity(selectedFriend == nil ? 0.4 : 1)
+                    .help(selectedFriend.map { "Poke \($0.name)" } ?? "")
                 }
+                .fixedSize(horizontal: false, vertical: true)
 
                 if let error = poke.actionError {
                     PokeError(message: error)
                 }
             }
         }
+    }
+
+    private var justPokedSelected: Bool {
+        selectedFriend.map { poke.justPoked == $0.id } ?? false
     }
 
     private func send() {
