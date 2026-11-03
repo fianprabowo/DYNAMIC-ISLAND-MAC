@@ -114,7 +114,7 @@ Pokes travel through a [Supabase](https://supabase.com) project that you and you
 
 Then everyone, on their own Mac: open the notch's **Poke** tab, paste the URL and key, click *Connect* and enter a name. Each person gets a friend code like `K7QX-M2PA`; entering a friend's code makes you friends both ways. Share the URL and key privately with friends (not in this repo): the key is meant to ship in apps, but it lets anyone who has it sign up to your project.
 
-- What's stored: in Supabase, each person's name and friend code, who is friends with whom, and pokes (sender, recipient, message) for a week. On the Mac, the URL and key in the app's preferences and the sign-in in `~/Library/Application Support/<bundle id>/Poke/`, readable by the user only.
+- What's stored: in Supabase, each person's name and friend code, who is friends with whom, and pokes (sender, recipient, message) for a week. To empty the pokes every night instead, also run [`supabase/nightly-cleanup.sql`](supabase/nightly-cleanup.sql) (23:59 Jakarta time; change the schedule for another time zone). On the Mac, the URL and key in the app's preferences and the sign-in in `~/Library/Application Support/<bundle id>/Poke/`, readable by the user only.
 - Pokes arrive right away while the app runs. Pokes sent while it was off show when it comes back; those older than 10 minutes go only to the Alerts tab.
 - At most 10 pokes a minute per person, and messages up to 100 characters.
 - Supabase pauses free projects after about a week without use. If the Poke tab says it can't reach Supabase, restore the project in the dashboard.
