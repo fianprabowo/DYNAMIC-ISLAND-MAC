@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import OSLog
 import Supabase
 
 /// Poke: friends who also run Dynamic Island nudge each other's notch. Pokes go through a Supabase
@@ -99,6 +100,10 @@ class PokeService: ObservableObject {
     private let bannerMaxAge: TimeInterval = 10 * 60
     /// How long to wait before connecting again when the network was down, like right after login.
     private let retryDelay: TimeInterval = 30
+    /// Realtime doesn't promise delivery (a dropped socket, sleep), so new pokes are also checked
+    /// for this often.
+    private let pollInterval: TimeInterval = 20
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "Poke")
     private let notificationManager = NotificationManager.shared
     private var client: SupabaseClient?
     private var channel: RealtimeChannelV2?
@@ -120,6 +125,14 @@ class PokeService: ObservableObject {
     private init() {
         if !projectURL.isEmpty && !anonKey.isEmpty {
             connect()
+        }
+        // The socket died while asleep; check for pokes as soon as the network is likely back.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                self?.log.info("Woke from sleep, checking for pokes")
+                await self?.fetchMissed()
+            }
         }
     }
 
@@ -318,8 +331,8 @@ class PokeService: ObservableObject {
         }
     }
 
-    /// New pokes arrive through Realtime; after (re)connecting, the ones missed while offline are
-    /// fetched too.
+    /// New pokes arrive through Realtime right away. Since Realtime can miss some, the ones not seen
+    /// yet are also fetched after (re)connecting, after waking and every `pollInterval`.
     private func listen() {
         guard let client, let userID = profile?.id else { return }
         stopListening()
@@ -329,6 +342,7 @@ class PokeService: ObservableObject {
 
         listenTasks.append(Task { [weak self] in
             for await status in channel.statusChange {
+                self?.log.info("Realtime: \(String(describing: status), privacy: .public)")
                 self?.isListening = status == .subscribed
                 if status == .subscribed {
                     await self?.catchUp()
@@ -337,13 +351,27 @@ class PokeService: ObservableObject {
         })
         listenTasks.append(Task { [weak self] in
             for await insert in inserts {
-                if let poke = try? insert.decodeRecord(as: Poke.self, decoder: PostgrestClient.Configuration.jsonDecoder) {
-                    self?.receive(poke)
+                do {
+                    let poke = try insert.decodeRecord(as: Poke.self, decoder: PostgrestClient.Configuration.jsonDecoder)
+                    self?.receive(poke, via: "Realtime")
+                } catch {
+                    // It's fetched by the next check instead.
+                    self?.log.error("Couldn't read a poke from Realtime: \(String(describing: error), privacy: .public)")
                 }
             }
         })
-        listenTasks.append(Task {
-            try? await channel.subscribeWithError()
+        listenTasks.append(Task { [weak self] in
+            do {
+                try await channel.subscribeWithError()
+            } catch {
+                self?.log.error("Realtime subscribe failed: \(String(describing: error), privacy: .public)")
+            }
+        })
+        listenTasks.append(Task { [weak self, pollInterval] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(pollInterval))
+                await self?.fetchMissed()
+            }
         })
     }
 
@@ -358,21 +386,33 @@ class PokeService: ObservableObject {
     }
 
     private func catchUp() async {
-        guard let client, let userID = profile?.id else { return }
         try? await loadFriends()
-        guard let lastPokeID else {
-            // First time: start after the newest poke, without showing older ones.
-            let newest: [Poke] = (try? await client.from("pokes").select().eq("recipient_id", value: userID).order("id", ascending: false).limit(1).execute().value) ?? []
-            self.lastPokeID = max(self.lastPokeID ?? 0, newest.first?.id ?? 0)
-            return
-        }
-        let missed: [Poke] = (try? await client.from("pokes").select().eq("recipient_id", value: userID).gt("id", value: lastPokeID).order("id").limit(20).execute().value) ?? []
-        missed.forEach(receive)
+        await fetchMissed()
     }
 
-    private func receive(_ poke: Poke) {
-        // A poke that arrived through Realtime while catching up isn't shown twice.
+    /// Fetches the pokes not seen yet.
+    private func fetchMissed() async {
+        guard state == .ready, let client, let userID = profile?.id else { return }
+        do {
+            guard let lastPokeID else {
+                // First time: start after the newest poke, without showing older ones.
+                let newest: [Poke] = try await client.from("pokes").select().eq("recipient_id", value: userID).order("id", ascending: false).limit(1).execute().value
+                self.lastPokeID = max(self.lastPokeID ?? 0, newest.first?.id ?? 0)
+                return
+            }
+            let missed: [Poke] = try await client.from("pokes").select().eq("recipient_id", value: userID).gt("id", value: lastPokeID).order("id").limit(20).execute().value
+            for poke in missed {
+                receive(poke, via: "check")
+            }
+        } catch {
+            log.error("Checking for pokes failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func receive(_ poke: Poke, via source: String) {
+        // A poke both Realtime and a check brought isn't shown twice.
         guard shownPokeIDs.insert(poke.id).inserted else { return }
+        log.info("Poke \(poke.id) from \(source, privacy: .public)")
         lastPokeID = max(lastPokeID ?? 0, poke.id)
         if !friends.contains(where: { $0.id == poke.senderID }) {
             refreshFriends()
