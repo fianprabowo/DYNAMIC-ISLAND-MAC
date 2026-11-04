@@ -6,6 +6,7 @@ import AppKit
 /// into a wide panel with Nook / Alerts / System tabs.
 struct NotchIslandView: View {
     @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var meet: MeetController
     @EnvironmentObject var claudeUsage: ClaudeUsageMonitor
     @EnvironmentObject var spotifyManager: SpotifyManager
     @EnvironmentObject var notificationManager: NotificationManager
@@ -75,7 +76,7 @@ struct NotchIslandView: View {
         // Only the bottom corners are rounded, so it looks like the notch itself grew.
         .clipShape(IslandShape(
             barHeight: layout.notchSize.height + 8,
-            bodyWidth: layout.isExpanded && layout.showsVideoPanel ? IslandLayout.videoBodyWidth : size.width,
+            bodyWidth: layout.isExpanded && layout.panelStyle == .video ? IslandLayout.videoBodyWidth : size.width,
             bodyRadius: cornerRadius
         ))
         .foregroundColor(.white)
@@ -87,7 +88,11 @@ struct NotchIslandView: View {
 
     private var hasActivity: Bool {
         spotifyManager.isPlaying || notificationManager.unreadCount > 0 || claudeUsage.snapshot.isWorking
-            || timerManager.isActive || calendarManager.upcomingMeeting != nil || vpnManager.isConnected
+            || timerManager.isActive || calendarManager.upcomingMeeting != nil || vpnManager.isConnected || isInMeet
+    }
+
+    private var isInMeet: Bool {
+        meet.meeting?.isInCall == true
     }
 
     /// The meeting's icon is on the left only when nothing else is live.
@@ -102,10 +107,16 @@ struct NotchIslandView: View {
     /// Claude and music can be live at the same time: Claude takes the left wing and the music bars
     /// the right one, so both animations stay visible. A meeting's countdown, then a timer, take the
     /// right wing before anything else, since they're about time. Unread notifications come last.
+    /// A Google Meet call comes before everything: a camera on the left (a crossed-out microphone
+    /// while muted), how long it has run on the right.
     private var collapsedBar: some View {
         HStack(spacing: 0) {
             Group {
-                if claudeUsage.snapshot.isWorking {
+                if isInMeet {
+                    Image(systemName: meet.meeting?.isMicrophoneOn == false ? "mic.slash.fill" : "video.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(meet.meeting?.isMicrophoneOn == false ? .red : .green)
+                } else if claudeUsage.snapshot.isWorking {
                     ClaudeWorkingIcon()
                 } else if spotifyManager.isPlaying, let artwork = spotifyManager.artwork {
                     Image(nsImage: artwork)
@@ -139,7 +150,11 @@ struct NotchIslandView: View {
             Spacer(minLength: layout.notchSize.width)
 
             Group {
-                if let meeting = calendarManager.upcomingMeeting {
+                if isInMeet, let startedAt = meet.callStartedAt {
+                    CallDuration(since: startedAt)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.green)
+                } else if let meeting = calendarManager.upcomingMeeting {
                     MeetingCountdown(meeting: meeting, showsIcon: !leftWingShowsMeeting)
                 } else if timerManager.isActive {
                     TimerCountdown(compact: true)
@@ -593,13 +608,7 @@ private struct NotchExpandedView: View {
             Group {
                 switch layout.selectedTab {
                 case .nook:
-                    HStack(spacing: 16) {
-                        CalendarWidget()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        separator
-                        ClaudeUsageWidget()
-                            .frame(width: 140, alignment: .leading)
-                    }
+                    NookView()
                 case .media:
                     MediaTabView()
                 case .alerts:
@@ -702,12 +711,6 @@ private struct NotchExpandedView: View {
         .help(tab.rawValue)
     }
 
-    private var separator: some View {
-        Rectangle()
-            .fill(Color.white.opacity(0.12))
-            .frame(width: 1)
-            .padding(.vertical, 6)
-    }
 }
 
 // MARK: - VPN
@@ -1566,7 +1569,7 @@ private struct MediaTabView: View {
         content
             .overlay(alignment: .topTrailing) {
                 // The YouTube video panel is narrower; the video shows the switcher itself.
-                if spotifyManager.availableSources.count > 1 && !layout.showsVideoPanel {
+                if spotifyManager.availableSources.count > 1 && layout.panelStyle != .video {
                     SourceSwitcher()
                 }
             }
@@ -1583,10 +1586,7 @@ private struct MediaTabView: View {
                     MediaProgressBar()
                 }
                 .frame(width: 230, alignment: .leading)
-                Rectangle()
-                    .fill(Color.white.opacity(0.12))
-                    .frame(width: 1)
-                    .padding(.vertical, 6)
+                ColumnSeparator()
                 LyricsView()
             }
         }
@@ -1683,10 +1683,14 @@ private struct YouTubeMediaView: View {
             isBlocked = false
         }
         .onChange(of: showsVideo, initial: true) { _, shows in
-            layout.setShowsVideoPanel(shows)
+            if shows {
+                layout.setPanelStyle(.video)
+            } else {
+                layout.resetPanelStyle(from: .video)
+            }
         }
         .onDisappear {
-            layout.setShowsVideoPanel(false)
+            layout.resetPanelStyle(from: .video)
         }
     }
 
@@ -2021,12 +2025,309 @@ private struct LyricLineStyle: ButtonStyle {
     }
 }
 
+/// The thin line between columns in the Nook and Media tabs.
+private struct ColumnSeparator: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.12))
+            .frame(width: 1)
+            .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Nook
+/// The calendar on the left, the picked meeting in the middle, and Claude usage on the right.
+private struct NookView: View {
+    @EnvironmentObject var calendarManager: CalendarManager
+    @EnvironmentObject var meet: MeetController
+    @State private var selectedDay = Calendar.current.startOfDay(for: Date())
+    /// The event clicked in the list; nil shows the meeting happening now or next.
+    @State private var selectedEventID: String?
+
+    var body: some View {
+        // In a call, the call takes the Nook: its live picture, with the controls on hover.
+        if let meeting = meet.meeting, meeting.isInCall {
+            MeetCallView(meeting: meeting, eventTitle: eventTitle(for: meeting))
+        } else {
+            calendarAndUsage
+        }
+    }
+
+    private var calendarAndUsage: some View {
+        let events = calendarManager.events(on: selectedDay)
+        let shown = events.first { $0.id == selectedEventID } ?? focusEvent(in: events)
+
+        return HStack(spacing: 14) {
+            CalendarWidget(selectedDay: $selectedDay, highlightedEventID: shown?.id) { event in
+                selectedEventID = event.id
+            }
+            .frame(width: 228, alignment: .leading)
+
+            Group {
+                // A meeting open in Chrome, not joined yet, turns the card into its controller.
+                if let meeting = meet.meeting {
+                    MeetControlCard(meeting: meeting, eventTitle: eventTitle(for: meeting))
+                } else {
+                    MeetingCard(event: shown, hasEvents: !events.isEmpty, hasAccess: calendarManager.hasAccess)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            ColumnSeparator()
+            ClaudeUsageWidget()
+                .frame(width: 140, alignment: .leading)
+        }
+        .onChange(of: selectedDay) {
+            selectedEventID = nil
+        }
+    }
+
+    /// Today's calendar event with the same Meet link, for a better name than the tab's.
+    private func eventTitle(for meeting: MeetController.Meeting) -> String? {
+        calendarManager.events(on: Date())
+            .first { $0.joinURL.flatMap(MeetController.meetingCode(in:)) == meeting.code }?
+            .title
+    }
+
+    /// Today: the meeting going on or the next one; another day: its first meeting.
+    private func focusEvent(in events: [CalendarEvent]) -> CalendarEvent? {
+        let meetings = events.filter { !$0.isAllDay && !$0.isDeclined }
+        if Calendar.current.isDateInToday(selectedDay) {
+            let now = Date()
+            return meetings.first { $0.end > now } ?? meetings.last ?? events.first
+        }
+        return meetings.first ?? events.first
+    }
+}
+
+/// A Google Meet tab in Chrome before joining: the microphone and camera to set up, and Join now.
+/// A click on the name shows the tab.
+private struct MeetControlCard: View {
+    @EnvironmentObject var meet: MeetController
+    let meeting: MeetController.Meeting
+    /// The calendar event's name, when one has this meeting's link.
+    let eventTitle: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 6, height: 6)
+                Text(meeting.isScriptable ? "Ready to join" : "Google Meet")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.orange)
+                Spacer(minLength: 0)
+                Image(systemName: "video.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(.gray)
+            }
+
+            Button(action: meet.reveal) {
+                Text(eventTitle ?? meeting.title)
+                    .font(.system(size: 13, weight: .bold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.plain)
+            .help("Show the meeting in Chrome")
+
+            Text(meeting.code)
+                .font(.system(size: 9))
+                .foregroundColor(.gray)
+
+            Spacer(minLength: 4)
+
+            if meeting.isScriptable {
+                HStack(spacing: 8) {
+                    MeetToggle(isOn: meeting.isMicrophoneOn, on: "mic.fill", off: "mic.slash.fill", name: "microphone", action: meet.toggleMicrophone)
+                    MeetToggle(isOn: meeting.isCameraOn, on: "video.fill", off: "video.slash.fill", name: "camera", action: meet.toggleCamera)
+                    if meeting.canJoin {
+                        Button(action: meet.join) {
+                            Text("Join now")
+                                .font(.system(size: 11, weight: .bold))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 28)
+                                .background(Capsule().fill(Color.green))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                Text("To control it here, turn on View › Developer › Allow JavaScript from Apple Events in this Chrome profile.")
+                    .font(.system(size: 9))
+                    .foregroundColor(.gray)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+    }
+}
+
+/// A Google Meet call in Chrome, live: the Chrome window's picture (the shared screen and the
+/// cameras) in the YouTube-sized panel, with the name and length on top and the microphone, camera
+/// and Leave below, shown on hover. A click on the picture shows the tab.
+private struct MeetCallView: View {
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var meet: MeetController
+    let meeting: MeetController.Meeting
+    let eventTitle: String?
+    @State private var problem: MeetWindowCapture.Problem?
+    @State private var isHovering = false
+
+    var body: some View {
+        ZStack {
+            MeetWindowView(tabTitle: meeting.tabTitle, browserBarHeight: meeting.browserBarHeight) { problem = $0 }
+                .overlay(Color.clear.contentShape(Rectangle()).onTapGesture(perform: meet.reveal))
+            if let problem {
+                note(for: problem)
+            }
+            if isHovering || problem != nil {
+                titleBar
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity)
+                controlBar
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .transition(.opacity)
+            }
+        }
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: isHovering)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { layout.setPanelStyle(.video) }
+        .onDisappear { layout.resetPanelStyle(from: .video) }
+    }
+
+    private var titleBar: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.green)
+                .frame(width: 6, height: 6)
+            Text(eventTitle ?? meeting.title)
+                .font(.system(size: 11, weight: .bold))
+                .lineLimit(1)
+            if let startedAt = meet.callStartedAt {
+                CallDuration(since: startedAt)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 14)
+        .background(LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom))
+        .allowsHitTesting(false)
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 8) {
+            if meeting.isScriptable {
+                MeetToggle(isOn: meeting.isMicrophoneOn, on: "mic.fill", off: "mic.slash.fill", name: "microphone", action: meet.toggleMicrophone)
+                MeetToggle(isOn: meeting.isCameraOn, on: "video.fill", off: "video.slash.fill", name: "camera", action: meet.toggleCamera)
+                Button(action: meet.leave) {
+                    Image(systemName: "phone.down.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 44, height: 28)
+                        .background(Capsule().fill(Color.red))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Leave the call")
+            }
+            Spacer(minLength: 0)
+            Button(action: meet.reveal) {
+                Image(systemName: "arrow.up.forward.square")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MediaButtonStyle())
+            .help("Show in Chrome")
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 16)
+        .padding(.bottom, 8)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
+    }
+
+    @ViewBuilder
+    private func note(for problem: MeetWindowCapture.Problem) -> some View {
+        VStack(spacing: 6) {
+            switch problem {
+            case .noPermission:
+                Text("Allow Screen Recording for Dynamic Island to see the call here.")
+                Button("Allow Screen Recording") {
+                    // The first time this asks; after that macOS only offers System Settings.
+                    if !CGRequestScreenCaptureAccess(),
+                       let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .font(.system(size: 10, weight: .semibold))
+            case .windowNotFound:
+                Text("Show the Meet tab in its Chrome window (not minimized) to see the call here.")
+            case .failed(let message):
+                Text("Couldn't show the call: \(message)")
+            }
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundColor(.gray)
+        .multilineTextAlignment(.center)
+        .padding(20)
+    }
+}
+
+/// A round Meet button that is red while its device is off; hidden when Meet doesn't show it.
+private struct MeetToggle: View {
+    let isOn: Bool?
+    let on: String
+    let off: String
+    let name: String
+    let action: () -> Void
+
+    var body: some View {
+        if let isOn {
+            Button(action: action) {
+                Image(systemName: isOn ? on : off)
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(isOn ? Color.white.opacity(0.14) : Color.red))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(isOn ? "Turn off the \(name)" : "Turn on the \(name)")
+        }
+    }
+}
+
+/// How long a call has run, "4:05" or "1:02:10", ticking every second.
+private struct CallDuration: View {
+    let since: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(formatCountdown(context.date.timeIntervalSince(since), compact: false))
+                .monospacedDigit()
+        }
+    }
+}
+
 // MARK: - Calendar
 private struct CalendarWidget: View {
     @EnvironmentObject var calendarManager: CalendarManager
     @EnvironmentObject var themeManager: ThemeManager
 
-    @State private var selectedDay = Calendar.current.startOfDay(for: Date())
+    @Binding var selectedDay: Date
+    let highlightedEventID: String?
+    let onSelectEvent: (CalendarEvent) -> Void
 
     private var today: Date { Calendar.current.startOfDay(for: Date()) }
 
@@ -2038,7 +2339,7 @@ private struct CalendarWidget: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(selectedDay, format: .dateTime.month(.abbreviated))
                     .font(.system(size: 20, weight: .bold))
@@ -2106,53 +2407,222 @@ private struct CalendarWidget: View {
             .foregroundColor(.gray)
             .frame(maxWidth: .infinity)
         } else {
-            EventList(events: events, limit: 2)
+            EventList(events: events, highlightedID: highlightedEventID, onSelect: onSelectEvent)
         }
     }
 }
 
+/// Every event of the day, scrolled to the one shown in the meeting card; a click shows another.
 private struct EventList: View {
     let events: [CalendarEvent]
-    let limit: Int
+    let highlightedID: String?
+    let onSelect: (CalendarEvent) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(events.prefix(limit)) { event in
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color(event.color))
-                        .frame(width: 3, height: 24)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(event.title)
-                            .font(.system(size: 10, weight: .semibold))
-                            .lineLimit(1)
-                        Text(event.timeRange)
-                            .font(.system(size: 9))
-                            .foregroundColor(.gray)
-                            .lineLimit(1)
-                    }
-                    if let joinURL = event.joinURL, event.end > Date() {
-                        Spacer(minLength: 4)
-                        Button("Join") {
-                            NSWorkspace.shared.open(joinURL)
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 9, weight: .bold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.green)
-                        .clipShape(Capsule())
-                        // Invitations come from anyone: show where the link goes before it's clicked.
-                        .help(joinURL.absoluteString)
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(events) { event in
+                        row(event)
+                            .id(event.id)
                     }
                 }
             }
-            if events.count > limit {
-                Text("+\(events.count - limit) more")
-                    .font(.system(size: 9))
-                    .foregroundColor(.gray)
+            .onAppear {
+                if let highlightedID { proxy.scrollTo(highlightedID, anchor: .top) }
+            }
+            .onChange(of: highlightedID) { _, id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .top) }
             }
         }
+    }
+
+    private func row(_ event: CalendarEvent) -> some View {
+        let isHighlighted = event.id == highlightedID
+        let isOver = event.end <= Date()
+
+        return Button { onSelect(event) } label: {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color(event.color))
+                    .frame(width: 3, height: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(event.title)
+                        .font(.system(size: 10, weight: .semibold))
+                        .strikethrough(event.isDeclined)
+                        .lineLimit(1)
+                    Text(event.timeRange)
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if event.joinURL != nil && !isOver {
+                    Image(systemName: "video.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(.green)
+                }
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .opacity(isOver && !isHighlighted ? 0.5 : 1)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(isHighlighted ? 0.1 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The picked meeting, or the one happening now or next: when it is, where, and a big Join button
+/// for its video call.
+private struct MeetingCard: View {
+    let event: CalendarEvent?
+    let hasEvents: Bool
+    let hasAccess: Bool
+
+    var body: some View {
+        Group {
+            if let event {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    details(event, now: context.date)
+                }
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: "video.badge.checkmark")
+                        .font(.system(size: 16))
+                    Text(hasAccess ? (hasEvents ? "Pick a meeting" : "No meetings") : "Calendar is off")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(.gray)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+    }
+
+    private func details(_ event: CalendarEvent, now: Date) -> some View {
+        let status = status(of: event, now: now)
+        let canJoin = event.joinURL != nil && event.end > now
+
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(status.color)
+                    .frame(width: 6, height: 6)
+                Text(status.text)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(status.color)
+                    .lineLimit(1)
+            }
+
+            Text(event.title)
+                .font(.system(size: 13, weight: .bold))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(event.isAllDay ? "All day" : "\(event.timeRange) · \(duration(of: event))")
+                .font(.system(size: 10))
+                .foregroundColor(.gray)
+                .lineLimit(1)
+
+            HStack(spacing: 4) {
+                if let location = event.location {
+                    Image(systemName: "mappin.and.ellipse")
+                    Text(location)
+                } else {
+                    Circle()
+                        .fill(Color(event.color))
+                        .frame(width: 6, height: 6)
+                    Text(event.calendarName)
+                }
+            }
+            .font(.system(size: 9))
+            .foregroundColor(.gray)
+            .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            if canJoin, let url = event.joinURL {
+                Button { join(url) } label: {
+                    Label("Join \(service(of: url))", systemImage: "video.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 26)
+                        .background(Capsule().fill(Color.green))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                // Invitations come from anyone: show where the link goes before it's clicked.
+                .help(url.absoluteString)
+            } else {
+                Button(action: openCalendar) {
+                    Label("Open in Calendar", systemImage: "calendar")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                        .background(Capsule().fill(Color.white.opacity(0.1)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func status(of event: CalendarEvent, now: Date) -> (text: String, color: Color) {
+        if event.isDeclined { return ("Declined", .gray) }
+        if event.isAllDay { return ("All day", .gray) }
+        if event.end <= now { return ("Ended", .gray) }
+        if event.start <= now {
+            return ("Now · \(minutes(event.end.timeIntervalSince(now))) left", .green)
+        }
+        let untilStart = event.start.timeIntervalSince(now)
+        if Calendar.current.isDateInToday(event.start) {
+            return ("In \(minutes(untilStart))", untilStart <= 10 * 60 ? .orange : .blue)
+        }
+        if Calendar.current.isDateInTomorrow(event.start) {
+            return ("Tomorrow", .blue)
+        }
+        return (event.start.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)), .gray)
+    }
+
+    /// "5 min", "1 h", "2 h 15 min".
+    private func minutes(_ interval: TimeInterval) -> String {
+        let total = max(1, Int((interval / 60).rounded(.up)))
+        let hours = total / 60
+        let rest = total % 60
+        if hours == 0 { return "\(rest) min" }
+        return rest == 0 ? "\(hours) h" : "\(hours) h \(rest) min"
+    }
+
+    private func duration(of event: CalendarEvent) -> String {
+        minutes(event.end.timeIntervalSince(event.start))
+    }
+
+    private func service(of url: URL) -> String {
+        let host = url.host?.lowercased() ?? ""
+        if host.hasSuffix("zoom.us") || host.hasSuffix("zoom.com") { return "Zoom" }
+        if host == "meet.google.com" { return "Meet" }
+        if host.hasPrefix("teams.") { return "Teams" }
+        if host.hasSuffix("webex.com") { return "Webex" }
+        if host == "facetime.apple.com" { return "FaceTime" }
+        return "Call"
+    }
+
+    /// Meet opens in Chrome, where this card then controls it; other calls open their app or browser.
+    private func join(_ url: URL) {
+        if MeetController.isMeetLink(url) {
+            MeetController.open(url)
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func openCalendar() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.iCal") else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 }
 

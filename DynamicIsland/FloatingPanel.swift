@@ -53,8 +53,15 @@ class IslandLayout: ObservableObject {
     /// Whether the collapsed island shows the volume or brightness level beside the notch.
     @Published private(set) var showsHUD = false
     @Published private(set) var notchSize: CGSize
-    /// A YouTube video in the Media tab gets a taller panel; the width and tab bar stay the same.
-    @Published private(set) var showsVideoPanel = false
+    /// How big the open panel is: YouTube in the Media tab takes more room.
+    @Published private(set) var panelStyle = PanelStyle.regular
+
+    enum PanelStyle {
+        /// 640×180.
+        case regular
+        /// Taller for a YouTube video; below the tab bar it narrows to the video.
+        case video
+    }
 
     /// Width of the black "wings" shown beside the physical notch while collapsed.
     static let notchWing: CGFloat = 40
@@ -107,13 +114,18 @@ class IslandLayout: ObservableObject {
     }
 
     var notchExpandedSize: CGSize {
-        showsVideoPanel ? videoPanelSize : CGSize(width: Self.notchExpandedWidth, height: Self.notchExpandedHeight)
+        size(of: panelStyle)
     }
 
     /// The usual width and tab bar, with room below for the video.
-    private var videoPanelSize: CGSize {
-        CGSize(width: Self.notchExpandedWidth,
-               height: notchSize.height + Self.expandedTopPadding + Self.videoHeight + Self.expandedBottomPadding)
+    private func size(of style: PanelStyle) -> CGSize {
+        switch style {
+        case .regular:
+            return CGSize(width: Self.notchExpandedWidth, height: Self.notchExpandedHeight)
+        case .video:
+            return CGSize(width: Self.notchExpandedWidth,
+                          height: notchSize.height + Self.expandedTopPadding + Self.videoHeight + Self.expandedBottomPadding)
+        }
     }
 
     var notchWindowSize: CGSize {
@@ -136,8 +148,8 @@ class IslandLayout: ObservableObject {
 
     /// The largest the open island gets, for the island view's fixed size inside the window.
     var notchLargestWindowSize: CGSize {
-        Self.windowSize(for: CGSize(width: max(Self.notchExpandedWidth, videoPanelSize.width),
-                                    height: max(Self.notchExpandedHeight, videoPanelSize.height)))
+        let sizes = [PanelStyle.regular, .video].map(size(of:))
+        return Self.windowSize(for: CGSize(width: sizes.map(\.width).max() ?? 0, height: sizes.map(\.height).max() ?? 0))
     }
 
     private static func windowSize(for islandSize: CGSize) -> CGSize {
@@ -159,16 +171,25 @@ class IslandLayout: ObservableObject {
         }
     }
 
-    func setShowsVideoPanel(_ shows: Bool) {
-        guard shows != showsVideoPanel else { return }
-        if shows {
-            grow(to: Self.windowSize(for: videoPanelSize)) {
-                self.showsVideoPanel = true
+    func setPanelStyle(_ style: PanelStyle) {
+        guard style != panelStyle else { return }
+        let size = size(of: style)
+        if size.height >= notchExpandedSize.height {
+            grow(to: Self.windowSize(for: size)) {
+                self.panelStyle = style
             }
         } else {
             withAnimation(Self.collapseAnimation) {
-                showsVideoPanel = false
+                panelStyle = style
             }
+        }
+    }
+
+    /// Back to the regular panel, unless another view has set its own style in the meantime
+    /// (a view's disappearing can come after the next one appears).
+    func resetPanelStyle(from style: PanelStyle) {
+        if panelStyle == style {
+            setPanelStyle(.regular)
         }
     }
 
@@ -319,7 +340,7 @@ class FloatingPanel: NSPanel {
             // @Published emits before the stored value changes, so read the new state on the next pass.
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
             .store(in: &cancellables)
-        layout.$showsVideoPanel
+        layout.$panelStyle
             .dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
             .store(in: &cancellables)

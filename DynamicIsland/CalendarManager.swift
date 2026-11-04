@@ -12,6 +12,9 @@ struct CalendarEvent: Identifiable {
     /// The video call link (Zoom, Google Meet, Teams…) in the event's URL, location or notes.
     let joinURL: URL?
     let isDeclined: Bool
+    /// The event's location when it is a place, not a link.
+    let location: String?
+    let calendarName: String
 
     var timeRange: String {
         if isAllDay { return "All day" }
@@ -169,7 +172,9 @@ class CalendarManager: ObservableObject {
                     isAllDay: $0.isAllDay,
                     color: $0.calendar.color ?? .systemBlue,
                     joinURL: Self.joinURL(of: $0),
-                    isDeclined: $0.attendees?.first(where: \.isCurrentUser)?.participantStatus == .declined
+                    isDeclined: $0.attendees?.first(where: \.isCurrentUser)?.participantStatus == .declined,
+                    location: $0.location.flatMap { $0.isEmpty || $0.contains("://") ? nil : $0 },
+                    calendarName: $0.calendar.title
                 )
             }
     }
