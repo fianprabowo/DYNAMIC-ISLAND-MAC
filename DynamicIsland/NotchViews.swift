@@ -596,9 +596,6 @@ private struct IslandShape: Shape {
 private struct NotchExpandedView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var notificationManager: NotificationManager
-    @EnvironmentObject var systemMonitor: SystemMonitor
-    @EnvironmentObject var temperatureMonitor: TemperatureMonitor
-    @EnvironmentObject var themeManager: ThemeManager
 
     var body: some View {
         VStack(spacing: 0) {
@@ -619,14 +616,6 @@ private struct NotchExpandedView: View {
                     VPNView()
                 case .timer:
                     TimerView()
-                case .system:
-                    HStack(alignment: .top, spacing: 20) {
-                        StatsTabView(systemMonitor: systemMonitor, themeManager: themeManager)
-                            .frame(width: 170)
-                        TemperatureTabView(temperatureMonitor: temperatureMonitor, themeManager: themeManager)
-                            .frame(width: 170)
-                        Spacer(minLength: 0)
-                    }
                 }
             }
             .padding(.horizontal, IslandLayout.expandedHorizontalPadding)

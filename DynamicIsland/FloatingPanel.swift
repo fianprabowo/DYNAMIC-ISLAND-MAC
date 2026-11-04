@@ -9,7 +9,6 @@ enum NotchTab: String, CaseIterable {
     case alerts = "Alerts"
     case poke = "Poke"
     case timer = "Timer"
-    case system = "System"
     case vpn = "VPN"
 
     var icon: String {
@@ -19,7 +18,6 @@ enum NotchTab: String, CaseIterable {
         case .alerts: return "bell.fill"
         case .poke: return "hand.point.right.fill"
         case .timer: return "timer"
-        case .system: return "chart.bar.fill"
         case .vpn: return "lock.shield.fill"
         }
     }
