@@ -27,7 +27,7 @@ nonisolated enum YouTubeBridge {
             repeat with w in windows
                 repeat with t in tabs of w
                     set u to URL of t
-                    if u contains "youtube.com/watch" or u starts with "https://music.youtube.com/watch" then
+                    if u starts with "https://www.youtube.com/watch" or u starts with "https://music.youtube.com/watch" or u starts with "https://youtube.com/watch" or u starts with "https://m.youtube.com/watch" then
                         set info to ""
                         try
                             set info to execute t javascript "\(snapshotScript)"
@@ -41,7 +41,8 @@ nonisolated enum YouTubeBridge {
         """
         guard let result = await AppleScriptRunner.run(source), result.numberOfItems > 0 else { return [] }
         return (1...result.numberOfItems).compactMap { index in
-            guard let item = result.atIndex(index), item.numberOfItems == 4 else { return nil }
+            guard let item = result.atIndex(index), item.numberOfItems == 4,
+                  isWatchPage(item.atIndex(3)?.stringValue ?? "") else { return nil }
             return tab(
                 id: item.atIndex(1)?.stringValue ?? "",
                 title: item.atIndex(2)?.stringValue ?? "",
@@ -115,6 +116,27 @@ nonisolated enum YouTubeBridge {
         let playing: Bool
     }
 
+    /// YouTube's own hosts only: the page's answers are trusted for the position and the artwork.
+    private static let hosts: Set<String> = ["www.youtube.com", "youtube.com", "m.youtube.com", "music.youtube.com"]
+
+    private static func isWatchPage(_ url: String) -> Bool {
+        guard let components = URLComponents(string: url), components.scheme == "https",
+              let host = components.host?.lowercased() else { return false }
+        return hosts.contains(host) && components.path == "/watch"
+    }
+
+    /// The page reports these, so they're kept to finite times a video can have (up to 100 hours).
+    private static func sane(_ seconds: Double) -> Double {
+        seconds.isFinite ? min(max(seconds, 0), 360_000) : 0
+    }
+
+    /// Artwork from YouTube's image servers only, never a local file or another address.
+    private static func artworkURL(_ string: String) -> URL? {
+        guard let url = URL(string: string), url.scheme == "https", let host = url.host?.lowercased() else { return nil }
+        let imageHosts = ["ytimg.com", "ggpht.com", "googleusercontent.com"]
+        return imageHosts.contains { host == $0 || host.hasSuffix("." + $0) } ? url : nil
+    }
+
     private static func tab(id: String, title: String, url: String, info: String) -> Tab {
         let pageTitle = cleanTitle(title)
         let videoID = videoID(in: url)
@@ -130,9 +152,9 @@ nonisolated enum YouTubeBridge {
             title: parsed.title.isEmpty ? pageTitle : parsed.title,
             artist: parsed.artist.isEmpty ? "YouTube" : parsed.artist,
             album: parsed.album,
-            artworkURL: URL(string: parsed.artwork) ?? thumbnail,
-            position: parsed.position,
-            duration: parsed.duration,
+            artworkURL: artworkURL(parsed.artwork) ?? thumbnail,
+            position: sane(parsed.position),
+            duration: sane(parsed.duration),
             isPlaying: parsed.playing,
             isScriptable: true
         )
@@ -146,7 +168,9 @@ nonisolated enum YouTubeBridge {
     }
 
     private static func videoID(in url: String) -> String? {
-        URLComponents(string: url)?.queryItems?.first { $0.name == "v" }?.value
+        guard let id = URLComponents(string: url)?.queryItems?.first(where: { $0.name == "v" })?.value,
+              id.wholeMatch(of: /[A-Za-z0-9_-]{1,32}/) != nil else { return nil }
+        return id
     }
 
     private static func run(_ script: String, in tab: String) async {

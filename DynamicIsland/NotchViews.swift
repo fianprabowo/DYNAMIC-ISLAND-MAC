@@ -1545,7 +1545,7 @@ private struct MediaProgressBar: View {
 }
 
 private func formatTrackTime(_ seconds: TimeInterval) -> String {
-    let total = max(0, Int(seconds))
+    let total = seconds.isFinite ? Int(min(max(seconds, 0), 360_000)) : 0
     return String(format: "%d:%02d", total / 60, total % 60)
 }
 

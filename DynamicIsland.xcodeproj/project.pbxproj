@@ -13,6 +13,7 @@
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* Dynamic Island.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dynamic Island.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000130 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		000000000000000000000131 /* DynamicIsland.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DynamicIsland.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -38,6 +39,7 @@
 			children = (
 				000000000000000000000010 /* DynamicIsland */,
 				000000000000000000000130 /* Signing.xcconfig */,
+				000000000000000000000131 /* DynamicIsland.entitlements */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -265,12 +267,14 @@
 			baseConfigurationReference = 000000000000000000000130 /* Signing.xcconfig */;
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_ENTITLEMENTS = DynamicIsland.entitlements;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dynamic Island reads the current track from Spotify or Music and controls playback.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dynamic Island reads and controls what's playing in Spotify or Music, and YouTube and Google Meet tabs in Google Chrome (it runs JavaScript in those tabs).";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Dynamic Island shows your upcoming events when the island is open.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -305,12 +309,14 @@
 			baseConfigurationReference = 000000000000000000000130 /* Signing.xcconfig */;
 			buildSettings = {
 				CURRENT_PROJECT_VERSION = 1;
+				CODE_SIGN_ENTITLEMENTS = DynamicIsland.entitlements;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dynamic Island reads the current track from Spotify or Music and controls playback.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dynamic Island reads and controls what's playing in Spotify or Music, and YouTube and Google Meet tabs in Google Chrome (it runs JavaScript in those tabs).";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Dynamic Island shows your upcoming events when the island is open.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;

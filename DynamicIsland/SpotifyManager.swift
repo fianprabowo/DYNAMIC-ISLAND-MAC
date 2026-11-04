@@ -114,7 +114,7 @@ class SpotifyManager: ObservableObject {
         let data: Data?
         switch app {
         case .chrome:
-            guard let url else { return }
+            guard let url, url.scheme == "https" else { return }
             data = try? await URLSession.shared.data(from: url).0
         case .spotify:
             guard let urlString = await AppleScriptRunner.run("tell application \"Spotify\" to artwork url of current track")?.stringValue,

@@ -113,7 +113,8 @@ class VPNManager: ObservableObject {
         busy.insert(profile.id)
         Task {
             defer { busy.remove(profile.id) }
-            guard await CommandRunner.run(Self.cliPath, ["start", profile.id, "--password", pin]) != nil else {
+            // Typed in at Pritunl's prompt: as an argument (--password) any process could read it.
+            guard await CommandRunner.run(Self.cliPath, ["start", profile.id, "--password-read"], typing: pin) != nil else {
                 error = "Pritunl couldn't start \(profile.name). Is the Pritunl service running?"
                 return
             }
