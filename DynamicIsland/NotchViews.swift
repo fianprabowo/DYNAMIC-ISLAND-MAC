@@ -2032,13 +2032,23 @@ private struct NookView: View {
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
     /// The event clicked in the list; nil shows the meeting happening now or next.
     @State private var selectedEventID: String?
+    /// The call shown big, in place of the calendar and Claude usage, after its expand button.
+    @State private var isCallExpanded = false
 
     var body: some View {
-        // In a call, the call takes the Nook: its live picture, with the controls on hover.
-        if let meeting = meet.meeting, meeting.isInCall {
-            MeetCallView(meeting: meeting, eventTitle: eventTitle(for: meeting))
-        } else {
-            calendarAndUsage
+        Group {
+            if let meeting = meet.meeting, meeting.isInCall, isCallExpanded {
+                MeetCallView(meeting: meeting, eventTitle: eventTitle(for: meeting)) {
+                    isCallExpanded = false
+                }
+            } else {
+                calendarAndUsage
+            }
+        }
+        .onChange(of: meet.meeting?.isInCall == true) { _, isInCall in
+            if !isInCall {
+                isCallExpanded = false
+            }
         }
     }
 
@@ -2053,8 +2063,13 @@ private struct NookView: View {
             .frame(width: 228, alignment: .leading)
 
             Group {
-                // A meeting open in Chrome, not joined yet, turns the card into its controller.
-                if let meeting = meet.meeting {
+                // A Meet call shows here live; a meeting open in Chrome, not joined yet, turns the
+                // card into its controller.
+                if let meeting = meet.meeting, meeting.isInCall {
+                    MeetLiveCard(meeting: meeting, eventTitle: eventTitle(for: meeting)) {
+                        isCallExpanded = true
+                    }
+                } else if let meeting = meet.meeting {
                     MeetControlCard(meeting: meeting, eventTitle: eventTitle(for: meeting))
                 } else {
                     MeetingCard(event: shown, hasEvents: !events.isEmpty, hasAccess: calendarManager.hasAccess)
@@ -2157,14 +2172,96 @@ private struct MeetControlCard: View {
     }
 }
 
-/// A Google Meet call in Chrome, live: the Chrome window's picture (the shared screen and the
-/// cameras) in the YouTube-sized panel, with the name and length on top and the microphone, camera
-/// and Leave below, shown on hover. A click on the picture shows the tab.
+/// A Google Meet call in Chrome, live, between the calendar and Claude usage: the Chrome window's
+/// picture (the shared screen and the cameras) with the name and length on top and the microphone,
+/// camera and Leave below. The expand button, or a click on the picture, shows it bigger.
+private struct MeetLiveCard: View {
+    @EnvironmentObject var meet: MeetController
+    let meeting: MeetController.Meeting
+    let eventTitle: String?
+    let onExpand: () -> Void
+    @State private var problem: MeetWindowCapture.Problem?
+
+    var body: some View {
+        ZStack {
+            Color.black
+            MeetWindowView(tabTitle: meeting.tabTitle, browserBarHeight: meeting.browserBarHeight) { problem = $0 }
+                .overlay(Color.clear.contentShape(Rectangle()).onTapGesture(perform: onExpand))
+            if let problem {
+                MeetCaptureNote(problem: problem, isCompact: true)
+            }
+            VStack(spacing: 0) {
+                header
+                Spacer(minLength: 0)
+                controls
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var header: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color.green)
+                .frame(width: 6, height: 6)
+            Text(eventTitle ?? meeting.title)
+                .font(.system(size: 10, weight: .bold))
+                .lineLimit(1)
+            Spacer(minLength: 2)
+            if let startedAt = meet.callStartedAt {
+                CallDuration(since: startedAt)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            Button(action: onExpand) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MediaButtonStyle())
+            .help("Show the call bigger")
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 3)
+        .padding(.top, 3)
+        .padding(.bottom, 8)
+        .background(LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom))
+    }
+
+    private var controls: some View {
+        HStack(spacing: 6) {
+            if meeting.isScriptable {
+                MeetToggle(isOn: meeting.isMicrophoneOn, on: "mic.fill", off: "mic.slash.fill", name: "microphone", action: meet.toggleMicrophone, size: 24)
+                MeetToggle(isOn: meeting.isCameraOn, on: "video.fill", off: "video.slash.fill", name: "camera", action: meet.toggleCamera, size: 24)
+                MeetLeaveButton(height: 24)
+            }
+            Spacer(minLength: 0)
+            Button(action: meet.reveal) {
+                Image(systemName: "arrow.up.forward.square")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MediaButtonStyle())
+            .help("Show in Chrome")
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
+    }
+}
+
+/// A Google Meet call in Chrome, shown big after the live card's expand button: the Chrome window's
+/// picture in the YouTube-sized panel, with the name, length and a button back to the Nook on top,
+/// and the microphone, camera and Leave below on hover. A click on the picture shows the tab.
 private struct MeetCallView: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var meet: MeetController
     let meeting: MeetController.Meeting
     let eventTitle: String?
+    let onCollapse: () -> Void
     @State private var problem: MeetWindowCapture.Problem?
     @State private var isHovering = false
 
@@ -2173,12 +2270,11 @@ private struct MeetCallView: View {
             MeetWindowView(tabTitle: meeting.tabTitle, browserBarHeight: meeting.browserBarHeight) { problem = $0 }
                 .overlay(Color.clear.contentShape(Rectangle()).onTapGesture(perform: meet.reveal))
             if let problem {
-                note(for: problem)
+                MeetCaptureNote(problem: problem, isCompact: false)
             }
+            titleBar
+                .frame(maxHeight: .infinity, alignment: .top)
             if isHovering || problem != nil {
-                titleBar
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .transition(.opacity)
                 controlBar
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .transition(.opacity)
@@ -2208,12 +2304,20 @@ private struct MeetCallView: View {
                     .foregroundColor(.white.opacity(0.7))
             }
             Spacer(minLength: 0)
+            Button(action: onCollapse) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MediaButtonStyle())
+            .help("Back to the calendar and Claude usage")
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 14)
+        .padding(.leading, 10)
+        .padding(.trailing, 4)
+        .padding(.top, 4)
+        .padding(.bottom, 12)
         .background(LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom))
-        .allowsHitTesting(false)
     }
 
     private var controlBar: some View {
@@ -2221,15 +2325,7 @@ private struct MeetCallView: View {
             if meeting.isScriptable {
                 MeetToggle(isOn: meeting.isMicrophoneOn, on: "mic.fill", off: "mic.slash.fill", name: "microphone", action: meet.toggleMicrophone)
                 MeetToggle(isOn: meeting.isCameraOn, on: "video.fill", off: "video.slash.fill", name: "camera", action: meet.toggleCamera)
-                Button(action: meet.leave) {
-                    Image(systemName: "phone.down.fill")
-                        .font(.system(size: 12, weight: .bold))
-                        .frame(width: 44, height: 28)
-                        .background(Capsule().fill(Color.red))
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("Leave the call")
+                MeetLeaveButton(height: 28)
             }
             Spacer(minLength: 0)
             Button(action: meet.reveal) {
@@ -2246,13 +2342,19 @@ private struct MeetCallView: View {
         .padding(.bottom, 8)
         .background(LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom))
     }
+}
 
-    @ViewBuilder
-    private func note(for problem: MeetWindowCapture.Problem) -> some View {
-        VStack(spacing: 6) {
+/// Why the call's picture can't show, in place of it.
+private struct MeetCaptureNote: View {
+    let problem: MeetWindowCapture.Problem
+    /// Shorter words for the Nook's card.
+    let isCompact: Bool
+
+    var body: some View {
+        VStack(spacing: isCompact ? 3 : 6) {
             switch problem {
             case .noPermission:
-                Text("Allow Screen Recording for Dynamic Island to see the call here.")
+                Text(isCompact ? "To see the call here:" : "Allow Screen Recording for Dynamic Island to see the call here.")
                 Button("Allow Screen Recording") {
                     // The first time this asks; after that macOS only offers System Settings.
                     if !CGRequestScreenCaptureAccess(),
@@ -2260,17 +2362,36 @@ private struct MeetCallView: View {
                         NSWorkspace.shared.open(url)
                     }
                 }
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
+                .controlSize(isCompact ? .small : .regular)
             case .windowNotFound:
-                Text("Show the Meet tab in its Chrome window (not minimized) to see the call here.")
+                Text(isCompact ? "Show the Meet tab in Chrome to see the call here." : "Show the Meet tab in its Chrome window (not minimized) to see the call here.")
             case .failed(let message):
-                Text("Couldn't show the call: \(message)")
+                Text(isCompact ? "Couldn't show the call." : "Couldn't show the call: \(message)")
             }
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(.system(size: isCompact ? 9 : 10, weight: .medium))
         .foregroundColor(.gray)
         .multilineTextAlignment(.center)
-        .padding(20)
+        .padding(.horizontal, isCompact ? 10 : 20)
+    }
+}
+
+/// Meet's red Leave button.
+private struct MeetLeaveButton: View {
+    @EnvironmentObject var meet: MeetController
+    let height: CGFloat
+
+    var body: some View {
+        Button(action: meet.leave) {
+            Image(systemName: "phone.down.fill")
+                .font(.system(size: height * 0.43, weight: .bold))
+                .frame(width: height * 1.55, height: height)
+                .background(Capsule().fill(Color.red))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Leave the call")
     }
 }
 
@@ -2281,13 +2402,14 @@ private struct MeetToggle: View {
     let off: String
     let name: String
     let action: () -> Void
+    var size: CGFloat = 28
 
     var body: some View {
         if let isOn {
             Button(action: action) {
                 Image(systemName: isOn ? on : off)
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: size * 0.43, weight: .semibold))
+                    .frame(width: size, height: size)
                     .background(Circle().fill(isOn ? Color.white.opacity(0.14) : Color.red))
                     .contentShape(Circle())
             }
