@@ -13,6 +13,7 @@ struct NotchIslandView: View {
     @EnvironmentObject var calendarManager: CalendarManager
     @EnvironmentObject var timerManager: TimerManager
     @EnvironmentObject var hud: HUDMonitor
+    @EnvironmentObject var vpnManager: VPNManager
 
     var body: some View {
         // The island is an overlay on a flexible clear base, so its size never becomes the hosting
@@ -86,7 +87,7 @@ struct NotchIslandView: View {
 
     private var hasActivity: Bool {
         spotifyManager.isPlaying || notificationManager.unreadCount > 0 || claudeUsage.snapshot.isWorking
-            || timerManager.isActive || calendarManager.upcomingMeeting != nil
+            || timerManager.isActive || calendarManager.upcomingMeeting != nil || vpnManager.isConnected
     }
 
     /// The meeting's icon is on the left only when nothing else is live.
@@ -120,6 +121,11 @@ struct NotchIslandView: View {
                     Image(systemName: meeting.joinURL == nil ? "calendar" : "video.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(Color(meeting.color))
+                } else if !spotifyManager.isPlaying && notificationManager.unreadCount == 0 && vpnManager.isConnected {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(vpnColor)
+                        .help("VPN connected")
                 } else {
                     // Music without album art yet, or only notifications.
                     Image(systemName: spotifyManager.isPlaying ? "music.note" : "bell.fill")
@@ -405,6 +411,7 @@ private struct NotificationIcon: View {
 
 private let timerColor = Color.orange
 private let pokeColor = Color.pink
+private let vpnColor = Color.green
 
 private func notificationTint(_ type: NotificationType, _ themeManager: ThemeManager) -> Color {
     switch type {
@@ -414,6 +421,7 @@ private func notificationTint(_ type: NotificationType, _ themeManager: ThemeMan
     case .audio: return .white
     case .timer: return timerColor
     case .poke: return pokeColor
+    case .vpn: return vpnColor
     default: return Color(themeManager.currentTheme.accentColor)
     }
 }
@@ -598,6 +606,8 @@ private struct NotchExpandedView: View {
                     AlertsView()
                 case .poke:
                     PokeView()
+                case .vpn:
+                    VPNView()
                 case .timer:
                     TimerView()
                 case .system:
@@ -649,32 +659,14 @@ private struct NotchExpandedView: View {
     private var topBar: some View {
         HStack(spacing: 0) {
             HStack(spacing: 4) {
-                ForEach(NotchTab.allCases, id: \.self) { tab in
-                    Button(action: { layout.selectedTab = tab }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 10, weight: .semibold))
-                            if layout.selectedTab == tab {
-                                Text(tab.rawValue)
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                        }
-                        .foregroundColor(layout.selectedTab == tab ? .white : .gray)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(layout.selectedTab == tab ? Color.white.opacity(0.15) : Color.clear)
-                        .clipShape(Capsule())
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help(tab.rawValue)
-                }
+                ForEach(NotchTab.allCases.filter { !$0.isBesideSettings }, id: \.self, content: tabButton)
             }
             .padding(.leading, 16)
 
             Spacer(minLength: layout.notchSize.width + 20)
 
             HStack(spacing: 12) {
+                ForEach(NotchTab.allCases.filter(\.isBesideSettings), id: \.self, content: tabButton)
                 PinButton()
                 SettingsMenu()
             }
@@ -689,11 +681,199 @@ private struct NotchExpandedView: View {
         }
     }
 
+    private func tabButton(_ tab: NotchTab) -> some View {
+        Button(action: { layout.selectedTab = tab }) {
+            HStack(spacing: 4) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 10, weight: .semibold))
+                if layout.selectedTab == tab {
+                    Text(tab.rawValue)
+                        .font(.system(size: 11, weight: .semibold))
+                }
+            }
+            .foregroundColor(layout.selectedTab == tab ? .white : .gray)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(layout.selectedTab == tab ? Color.white.opacity(0.15) : Color.clear)
+            .clipShape(Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(tab.rawValue)
+    }
+
     private var separator: some View {
         Rectangle()
             .fill(Color.white.opacity(0.12))
             .frame(width: 1)
             .padding(.vertical, 6)
+    }
+}
+
+// MARK: - VPN
+/// Pritunl's profiles: each connects or disconnects with a click. A profile's PIN is asked once
+/// and kept in the keychain.
+private struct VPNView: View {
+    @EnvironmentObject var vpn: VPNManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !vpn.isInstalled {
+                emptyMessage("Install the Pritunl client to connect to a VPN from here.")
+            } else if vpn.profiles.isEmpty {
+                emptyMessage("No profiles yet. Import one in the Pritunl app.")
+            } else {
+                ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(vpn.profiles) { profile in
+                            VPNProfileRow(profile: profile)
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+            if let error = vpn.error {
+                Text(error)
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func emptyMessage(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundColor(.gray)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct VPNProfileRow: View {
+    @EnvironmentObject var vpn: VPNManager
+    let profile: VPNManager.Profile
+    @State private var pin = ""
+    @State private var isHovered = false
+    @FocusState private var isPINFocused: Bool
+
+    private var isBusy: Bool { vpn.busy.contains(profile.id) }
+    private var isAskingPIN: Bool { vpn.askingPIN == profile.id }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: profile.isConnected ? "lock.shield.fill" : "lock.open")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(profile.isConnected ? vpnColor : profile.isConnecting ? .orange : .gray)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(profile.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text(status)
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if isAskingPIN {
+                SecureField("PIN", text: $pin)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .frame(width: 110)
+                    .background(Color.white.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .focused($isPINFocused)
+                    .onSubmit(submitPIN)
+                    .onExitCommand { vpn.askingPIN = nil }
+                    .onAppear { isPINFocused = true }
+                VPNButton(title: "Connect", color: vpnColor, action: submitPIN)
+                    .disabled(pin.isEmpty)
+            } else {
+                if isHovered && !profile.isActive && vpn.hasSavedPIN(profile) {
+                    Button { vpn.forgetPIN(profile) } label: {
+                        Image(systemName: "key.slash")
+                            .font(.system(size: 10))
+                            .foregroundColor(.gray)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Forget the saved PIN")
+                }
+                if profile.isConnected {
+                    // Counts every second between Pritunl's reads, like Pritunl's own "Online For".
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(formatUptime(profile.uptime + Int(context.date.timeIntervalSince(vpn.refreshedAt))))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(vpnColor)
+                            .monospacedDigit()
+                    }
+                }
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 70)
+                } else if profile.isActive {
+                    VPNButton(title: "Disconnect", color: .red) { vpn.disconnect(profile) }
+                } else {
+                    VPNButton(title: "Connect", color: vpnColor) { vpn.connect(profile) }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(profile.isConnected ? vpnColor.opacity(0.12) : Color.white.opacity(isHovered ? 0.08 : 0.04))
+        )
+        .onHover { isHovered = $0 }
+    }
+
+    private var status: String {
+        if profile.isConnected {
+            return profile.clientAddress.isEmpty ? "Connected" : "Connected · \(profile.clientAddress)"
+        }
+        return profile.isConnecting || isBusy ? "Connecting…" : "Disconnected"
+    }
+
+    private func submitPIN() {
+        vpn.connect(profile, pin: pin)
+        pin = ""
+    }
+
+    /// 45 → "45s", 601 → "10m 01s", 3930 → "1h 05m 30s".
+    private func formatUptime(_ seconds: Int) -> String {
+        let seconds = max(seconds, 0)
+        let hours = seconds / 3600
+        let minutes = seconds % 3600 / 60
+        let rest = seconds % 60
+        if hours > 0 {
+            return String(format: "%dh %02dm %02ds", hours, minutes, rest)
+        }
+        return minutes > 0 ? String(format: "%dm %02ds", minutes, rest) : "\(rest)s"
+    }
+}
+
+private struct VPNButton: View {
+    let title: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 70)
+                .padding(.vertical, 3)
+                .background(color)
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 

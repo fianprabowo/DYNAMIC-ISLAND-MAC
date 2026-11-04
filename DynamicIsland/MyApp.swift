@@ -34,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let hudMonitor = HUDMonitor()
     let timerManager = TimerManager(notificationManager: .shared)
     let pokeService = PokeService.shared
+    let vpnManager = VPNManager.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -84,6 +85,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(hudMonitor)
                     .environmentObject(timerManager)
                     .environmentObject(pokeService)
+                    .environmentObject(vpnManager)
             )
         )
 
@@ -557,4 +559,5 @@ struct SettingsView: View {
         .environmentObject(HUDMonitor())
         .environmentObject(TimerManager(notificationManager: .shared))
         .environmentObject(PokeService.shared)
+        .environmentObject(VPNManager.shared)
 }

@@ -10,6 +10,7 @@ enum NotchTab: String, CaseIterable {
     case poke = "Poke"
     case timer = "Timer"
     case system = "System"
+    case vpn = "VPN"
 
     var icon: String {
         switch self {
@@ -19,7 +20,13 @@ enum NotchTab: String, CaseIterable {
         case .poke: return "hand.point.right.fill"
         case .timer: return "timer"
         case .system: return "chart.bar.fill"
+        case .vpn: return "lock.shield.fill"
         }
+    }
+
+    /// Beside the pin and settings, right of the notch: the left side is full.
+    var isBesideSettings: Bool {
+        self == .vpn
     }
 }
 
