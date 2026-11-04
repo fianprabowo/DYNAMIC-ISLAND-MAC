@@ -263,6 +263,11 @@ private struct NotchBannerView: View {
                 .buttonStyle(.plain)
                 .help(notification.url?.absoluteString ?? "")
             }
+
+            // In the open panel the toast has it in its corner instead.
+            if notification.type == .poke && !isInPanel {
+                BannerCloseButton()
+            }
         }
     }
 
@@ -298,6 +303,10 @@ private struct NotchBannerView: View {
             }
             .buttonStyle(.plain)
             .help("Send to \(senderName)")
+
+            if !isInPanel {
+                BannerCloseButton()
+            }
         }
     }
 
@@ -349,6 +358,29 @@ private struct NotchBannerView: View {
         isReplying = false
         reply = ""
         notificationManager.holdBanner(false)
+    }
+}
+
+/// Puts a poke's banner away at once; the poke stays in the Alerts tab. `compact` is the small one
+/// in the corner of the toast in the open panel.
+private struct BannerCloseButton: View {
+    @EnvironmentObject var notificationManager: NotificationManager
+    var compact = false
+
+    var body: some View {
+        Button {
+            notificationManager.dismissBanner()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: compact ? 7 : 9, weight: .bold))
+                .foregroundColor(.white.opacity(compact ? 0.9 : 0.7))
+                .frame(width: compact ? 16 : 20, height: compact ? 16 : 20)
+                .background(Circle().fill(compact ? Color(white: 0.3) : Color.white.opacity(0.15)))
+                .overlay(Circle().stroke(Color.black.opacity(compact ? 0.5 : 0)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Close")
     }
 }
 
@@ -599,6 +631,12 @@ private struct NotchExpandedView: View {
                 .background(Color(white: 0.16))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.1)))
+                .overlay(alignment: .topTrailing) {
+                    if banner.type == .poke {
+                        BannerCloseButton(compact: true)
+                            .offset(x: 5, y: -5)
+                    }
+                }
                 .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
                 .padding(.bottom, 10)
                 .id(banner.id)
