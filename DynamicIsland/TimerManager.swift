@@ -62,6 +62,9 @@ class TimerManager: ObservableObject {
     /// Keeps the tone alive while it plays; NSSound stops when it is released.
     private var player: NSSound?
     private var previewPlayer: NSSound?
+    private var previewTask: Task<Void, Never>?
+    /// The tone currently playing from the sound list, if any.
+    @Published private(set) var previewingTone: String?
 
     init(notificationManager: NotificationManager) {
         self.notificationManager = notificationManager
@@ -76,11 +79,29 @@ class TimerManager: ObservableObject {
         UserDefaults.standard.set(name, forKey: Self.soundKey)
     }
 
-    /// Plays a tone once without saving it.
+    /// Plays a tone once without saving it; playing the same tone again stops it.
     func preview(_ name: String) {
-        previewPlayer?.stop()
+        if previewingTone == name {
+            stopPreview()
+            return
+        }
+        stopPreview()
         previewPlayer = Self.sound(named: name)
         previewPlayer?.play()
+        previewingTone = name
+        let duration = previewPlayer?.duration ?? 0
+        previewTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.previewingTone = nil
+        }
+    }
+
+    func stopPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        previewPlayer?.stop()
+        previewingTone = nil
     }
 
     /// The tone's name without the "-EncoreInfinitum" suffix some Clock tones carry.

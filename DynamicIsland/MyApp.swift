@@ -22,7 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let temperatureMonitor = TemperatureMonitor()
     let notificationManager = NotificationManager.shared
     let themeManager = ThemeManager()
-    let mediaControlManager = MediaControlManager()
+    lazy var mediaControlManager = MediaControlManager(nowPlaying: spotifyManager)
     let islandLayout = IslandLayout()
     let calendarManager = CalendarManager()
     let claudeUsageMonitor = ClaudeUsageMonitor()

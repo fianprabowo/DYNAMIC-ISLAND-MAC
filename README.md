@@ -20,8 +20,11 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
   Only Claude Code's prompts are also kept in the Alerts tab. During a Focus, meeting reminders and Claude Code's prompts wait in the Alerts tab instead of dropping down; charging, headphones and timers show anyway.
 - **Volume and brightness on the notch.** While the volume or the built-in display's brightness changes, wider wings beside the notch show the level (not over a notification banner). macOS's own indicator still shows too. Turn it off with *Show Volume & Brightness* in the settings menu.
 - **Notifications on the notch.** When another app posts a notification, the notch drops down for three seconds with the app's icon, title and message. If the app's Dock badge goes up first, the notch drops down right away with "New notification", then again with the details about five seconds later. Click it to open the app. Notifications that arrive together show one after another; three or more from one app show as one banner ("Slack · 3 new notifications"). While a Focus such as Do Not Disturb is on, the notch stays quiet and notifications only go to the Alerts tab.
-- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has five tabs:
-  - **Nook:** now playing with controls, a calendar week strip with events, and Claude usage (plan limits left plus tokens today).
+- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has six tabs:
+  - **Nook:** a calendar week strip with events, and Claude usage (plan limits left plus tokens today).
+  - **Media:** what's playing in Spotify, Music or YouTube in Chrome. The player you last played stays on screen while paused; when more than one has something loaded, icons in the corner switch between them. The buttons, the progress bar (drag or click it) and a click on a lyric line all act on the player shown.
+    - **Spotify and Music** show the album art, controls, a progress bar and the lyrics, which follow the song line by line when they are timed. Lyrics come from [LRCLIB](https://lrclib.net), a free lyrics database: only the track's title, artist, album and length are sent, and only while the Media tab is open.
+    - **YouTube** (and YouTube Music) in Google Chrome shows the video itself, muted and kept in step with the tab, so the sound stays in Chrome. The panel grows taller for it and narrows to the video below the tab bar. YouTube's red control bar and the title show on hover and while paused; a click on the video plays or pauses. Needs Chrome's *View › Developer › Allow JavaScript from Apple Events* (see [YouTube in Chrome](#youtube-in-chrome)). Videos that don't allow embedding show their thumbnail instead.
   - **Alerts:** every notification, from the app and from other apps. Remove them one by one or clear them all. The latest 50 are kept, also across restarts, in `~/Library/Application Support/<bundle id>/notifications.json` (message text included).
   - **Poke:** friends who also run Dynamic Island. Pick a friend from the list and press Enter in the message field (or click *Poke*), with or without a short message: their notch drops down with "Alfian poked you", and a sound plays. *Poke Back* pokes right back; *Reply* (or a click on the banner) turns the banner into a message field right there: type and press Enter to send, or Escape to cancel. Needs a shared Supabase project (see [Poke](#poke)).
   - **Timer:** a countdown with presets (1 minute to 1 hour), pause, +1 minute and stop, and Pomodoro: 25 minutes of focus, then a 5-minute break that starts on its own. A sound plays when it ends. With *Turn On Focus*, Pomodoro turns a Focus on for the focus part (see [Focus during Pomodoro](#focus-during-pomodoro)).
@@ -61,6 +64,10 @@ By default the app is signed ad hoc, so macOS treats each new build as a new app
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = DynamicIsland Local Signing
 ```
+
+## YouTube in Chrome
+
+The Media tab reads and controls YouTube in Chrome with JavaScript sent over AppleScript. Chrome only allows that after you turn on *View › Developer › Allow JavaScript from Apple Events*. That setting isn't only for this app: any app you allow to control Chrome can then run JavaScript in any tab, including sites you're signed in to. Without it, the Media tab shows the video's title and thumbnail only. The first time, macOS also asks whether Dynamic Island may control Google Chrome.
 
 ## Claude plan usage
 

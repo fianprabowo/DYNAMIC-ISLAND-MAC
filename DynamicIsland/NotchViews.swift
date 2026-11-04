@@ -39,7 +39,7 @@ struct NotchIslandView: View {
     }
 
     private var island: some View {
-        let size = layout.isExpanded ? IslandLayout.notchExpandedSize
+        let size = layout.isExpanded ? layout.notchExpandedSize
             : layout.showsHUD ? layout.notchHUDSize
             : layout.showsBanner ? layout.notchBannerSize : layout.notchCollapsedSize
 
@@ -72,7 +72,11 @@ struct NotchIslandView: View {
         .frame(width: size.width, height: size.height, alignment: .top)
         .background(Color.black)
         // Only the bottom corners are rounded, so it looks like the notch itself grew.
-        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: cornerRadius, bottomTrailingRadius: cornerRadius))
+        .clipShape(IslandShape(
+            barHeight: layout.notchSize.height + 8,
+            bodyWidth: layout.isExpanded && layout.showsVideoPanel ? IslandLayout.videoBodyWidth : size.width,
+            bodyRadius: cornerRadius
+        ))
         .foregroundColor(.white)
     }
 
@@ -502,6 +506,37 @@ private func formatCountdown(_ seconds: TimeInterval, compact: Bool) -> String {
     return String(format: "%d:%02d", minutes, total % 60)
 }
 
+/// The island's outline: a bar along the top as wide as the island, and a body below it. The body
+/// is as wide as the island too, except in the YouTube video panel, where it narrows to the video
+/// while the tab bar keeps its width. Only the bottom corners are rounded, so it looks like the
+/// notch itself grew.
+private struct IslandShape: Shape {
+    var barHeight: CGFloat
+    var bodyWidth: CGFloat
+    var bodyRadius: CGFloat
+    var barRadius: CGFloat = 14
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(bodyWidth, bodyRadius) }
+        set {
+            bodyWidth = newValue.first
+            bodyRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let width = min(bodyWidth, rect.width)
+        var path = Path()
+        if width < rect.width {
+            let bar = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(barHeight, rect.height))
+            path.addPath(UnevenRoundedRectangle(bottomLeadingRadius: barRadius, bottomTrailingRadius: barRadius).path(in: bar))
+        }
+        let body = CGRect(x: rect.midX - width / 2, y: rect.minY, width: width, height: rect.height)
+        path.addPath(UnevenRoundedRectangle(bottomLeadingRadius: bodyRadius, bottomTrailingRadius: bodyRadius).path(in: body))
+        return path
+    }
+}
+
 // MARK: - Expanded Panel
 private struct NotchExpandedView: View {
     @EnvironmentObject var layout: IslandLayout
@@ -519,15 +554,14 @@ private struct NotchExpandedView: View {
                 switch layout.selectedTab {
                 case .nook:
                     HStack(spacing: 16) {
-                        MediaWidget()
-                            .frame(width: 200, alignment: .leading)
-                        separator
                         CalendarWidget()
                             .frame(maxWidth: .infinity, alignment: .leading)
                         separator
                         ClaudeUsageWidget()
-                            .frame(width: 112, alignment: .leading)
+                            .frame(width: 140, alignment: .leading)
                     }
+                case .media:
+                    MediaTabView()
                 case .alerts:
                     AlertsView()
                 case .poke:
@@ -544,9 +578,9 @@ private struct NotchExpandedView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 6)
-            .padding(.bottom, 14)
+            .padding(.horizontal, IslandLayout.expandedHorizontalPadding)
+            .padding(.top, IslandLayout.expandedTopPadding)
+            .padding(.bottom, IslandLayout.expandedBottomPadding)
             .frame(maxHeight: .infinity)
         }
         .overlay(alignment: .bottom) {
@@ -780,58 +814,190 @@ private struct TimerView: View {
     @State private var choosingSound = false
 
     private static let presets = [1, 5, 10, 15, 30, 60]
+    private static let presetColumns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
 
     var body: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 20) {
             ring
                 .frame(width: 104, height: 104)
 
-            VStack(alignment: .leading, spacing: 10) {
-                if choosingSound {
-                    soundList
-                } else {
+            if choosingSound {
+                soundList
+            } else {
+                Group {
                     if timerManager.isActive {
-                        HStack(spacing: 8) {
-                            if timerManager.isRinging {
-                                pill("Stop", systemImage: "stop.fill", prominent: true, action: timerManager.stop)
-                            } else {
-                                if timerManager.isRunning {
-                                    pill("Pause", systemImage: "pause.fill", action: timerManager.pause)
-                                } else {
-                                    pill("Resume", systemImage: "play.fill", prominent: true, action: timerManager.resume)
-                                }
-                                pill("+1 min", systemImage: "plus", action: timerManager.addMinute)
-                                pill("Stop", systemImage: "stop.fill", action: timerManager.stop)
-                            }
+                        activeControls
+                    } else {
+                        quickStart
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(spacing: 6) {
+                    pomodoroCard
+                    soundButton
+                }
+                .frame(width: 196)
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    /// The presets as tiles; a tap starts a plain timer.
+    private var quickStart: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionTitle("Quick Start")
+            LazyVGrid(columns: Self.presetColumns, spacing: 6) {
+                ForEach(Self.presets, id: \.self) { minutes in
+                    Button { timerManager.start(minutes: minutes) } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 2) {
+                            Text(minutes == 60 ? "1" : "\(minutes)")
+                                .font(.system(size: 17, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                            Text(minutes == 60 ? "hr" : "min")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.gray)
                         }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
                     }
-
-                    HStack(spacing: 6) {
-                        ForEach(Self.presets, id: \.self) { minutes in
-                            pill(minutes == 60 ? "1 h" : "\(minutes) m") { timerManager.start(minutes: minutes) }
-                        }
-                    }
-
-                    HStack(spacing: 12) {
-                        pill("Pomodoro \(TimerManager.focusMinutes) + \(TimerManager.restMinutes)", systemImage: "brain.head.profile", action: timerManager.startPomodoro)
-                        Toggle("Turn On Focus", isOn: $timerManager.turnsOnFocus)
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                            .font(.system(size: 10))
-                            .foregroundColor(.gray)
-                            .help("During Pomodoro focus, runs the shortcuts “\(TimerManager.focusOnShortcut)” and “\(TimerManager.focusOffShortcut)”")
-                    }
-
-                    pill("Sound: \(soundLabel)", systemImage: "speaker.wave.2.fill") { choosingSound = true }
+                    .buttonStyle(TimerCardStyle())
                 }
             }
-
-            Spacer(minLength: 0)
         }
+    }
+
+    /// Pause, +1 min and Stop while a countdown runs; only Stop once it rings.
+    private var activeControls: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionTitle(statusTitle)
+            Text(statusDetail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .lineLimit(1)
+
+            HStack(spacing: 14) {
+                if timerManager.isRinging {
+                    controlButton("Stop", systemImage: "stop.fill", prominent: true, action: timerManager.stop)
+                } else {
+                    if timerManager.isRunning {
+                        controlButton("Pause", systemImage: "pause.fill", action: timerManager.pause)
+                    } else {
+                        controlButton("Resume", systemImage: "play.fill", prominent: true, action: timerManager.resume)
+                    }
+                    controlButton("+1 min", systemImage: "plus", action: timerManager.addMinute)
+                    controlButton("Stop", systemImage: "stop.fill", action: timerManager.stop)
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    private var statusTitle: String {
+        if timerManager.isRinging { return "Time's Up" }
+        let phase = timerManager.phase.title
+        return timerManager.isRunning ? phase : "\(phase) · Paused"
+    }
+
+    private var statusDetail: String {
+        if timerManager.isRinging { return "Stop the alarm when you're ready" }
+        if let endDate = timerManager.endDate {
+            return "Ends at \(endDate.formatted(date: .omitted, time: .shortened))"
+        }
+        return "\(formatCountdown(timerManager.remaining(), compact: false)) left"
+    }
+
+    private var pomodoroCard: some View {
+        VStack(spacing: 4) {
+            Button(action: timerManager.startPomodoro) {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(timerColor)
+                        .frame(width: 26, height: 26)
+                        .background(timerColor.opacity(0.18))
+                        .clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Pomodoro")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("\(TimerManager.focusMinutes) min focus · \(TimerManager.restMinutes) min break")
+                            .font(.system(size: 9))
+                            .foregroundColor(.gray)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.gray)
+                }
+                .padding(8)
+            }
+            .buttonStyle(TimerCardStyle())
+
+            HStack(spacing: 6) {
+                Image(systemName: "moon.fill")
+                    .font(.system(size: 9))
+                Text("Turn On Focus")
+                    .font(.system(size: 10))
+                Spacer(minLength: 0)
+                Toggle("Turn On Focus", isOn: $timerManager.turnsOnFocus)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+            }
+            .foregroundColor(.gray)
+            .padding(.horizontal, 8)
+            .help("During Pomodoro focus, runs the shortcuts “\(TimerManager.focusOnShortcut)” and “\(TimerManager.focusOffShortcut)”")
+        }
+    }
+
+    private var soundButton: some View {
+        Button { choosingSound = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: timerManager.soundName.isEmpty ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.gray)
+                    .frame(width: 26)
+                Text("Sound")
+                    .font(.system(size: 11))
+                    .foregroundColor(.gray)
+                Spacer(minLength: 0)
+                Text(soundLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.gray)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+        }
+        .buttonStyle(TimerCardStyle())
     }
 
     private var soundLabel: String {
         timerManager.soundName.isEmpty ? "None" : TimerManager.displayName(timerManager.soundName)
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundColor(.gray)
+    }
+
+    private func controlButton(_ title: String, systemImage: String, prominent: Bool = false, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 4) {
+            Button(action: action) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(TimerCardStyle(prominent: prominent, cornerRadius: 20))
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(.gray)
+        }
     }
 
     /// Every sound with a play button to hear it and a Select button to save it.
@@ -842,7 +1008,13 @@ private struct TimerView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.gray)
                 Spacer()
-                pill("Done") { choosingSound = false }
+                if timerManager.isRinging {
+                    pill("Stop", systemImage: "stop.fill", prominent: true, action: timerManager.stop)
+                }
+                pill("Done") {
+                    timerManager.stopPreview()
+                    choosingSound = false
+                }
             }
 
             ScrollView {
@@ -852,15 +1024,15 @@ private struct TimerView: View {
                     }
                 }
             }
-            .frame(height: 130)
+            .frame(maxHeight: .infinity)
         }
-        .frame(width: 260)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func soundRow(_ name: String) -> some View {
         HStack(spacing: 8) {
             Button { timerManager.preview(name) } label: {
-                Image(systemName: "play.fill")
+                Image(systemName: timerManager.previewingTone == name ? "stop.fill" : "play.fill")
                     .font(.system(size: 8, weight: .bold))
                     .frame(width: 20, height: 20)
                     .background(Color.white.opacity(0.1))
@@ -891,24 +1063,34 @@ private struct TimerView: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             ZStack {
                 Circle()
-                    .stroke(Color.white.opacity(0.12), lineWidth: 6)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 7)
                 Circle()
-                    .trim(from: 0, to: timerManager.isActive ? 1 - timerManager.progress(at: context.date) : 0)
-                    .stroke(timerColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .trim(from: 0, to: ringFraction(at: context.date))
+                    .stroke(
+                        AngularGradient(colors: [timerColor.opacity(0.55), timerColor], center: .center),
+                        style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                    )
                     .rotationEffect(.degrees(-90))
+                    .shadow(color: timerColor.opacity(timerManager.isRunning || timerManager.isRinging ? 0.5 : 0), radius: 4)
                     .animation(.linear(duration: 1), value: context.date)
 
                 VStack(spacing: 1) {
                     Text(timerManager.isActive ? formatCountdown(timerManager.remaining(at: context.date), compact: false) : "0:00")
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
                         .monospacedDigit()
-                        .opacity(timerManager.isActive && !timerManager.isRunning ? 0.5 : 1)
-                    Text(timerManager.isRinging ? "Time's Up" : timerManager.isActive ? timerManager.phase.title : "Timer")
+                        .opacity(timerManager.isActive && !timerManager.isRunning && !timerManager.isRinging ? 0.5 : 1)
+                    Text(timerManager.isRinging ? "Time's Up" : timerManager.isActive ? timerManager.phase.title : "Ready")
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.gray)
+                        .foregroundColor(timerManager.isRinging ? timerColor : .gray)
                 }
             }
         }
+    }
+
+    /// Time left as a share of the countdown; a full ring while the alarm rings.
+    private func ringFraction(at date: Date) -> Double {
+        if timerManager.isRinging { return 1 }
+        return timerManager.isActive ? 1 - timerManager.progress(at: date) : 0
     }
 
     private func pill(_ title: String, systemImage: String? = nil, prominent: Bool = false, action: @escaping () -> Void) -> some View {
@@ -928,6 +1110,43 @@ private struct TimerView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A rounded tile that lights up on hover and shrinks a little when pressed.
+private struct TimerCardStyle: ButtonStyle {
+    var prominent = false
+    var cornerRadius: CGFloat = 10
+
+    func makeBody(configuration: Configuration) -> some View {
+        Card(configuration: configuration, prominent: prominent, cornerRadius: cornerRadius)
+    }
+
+    private struct Card: View {
+        let configuration: ButtonStyleConfiguration
+        let prominent: Bool
+        let cornerRadius: CGFloat
+        @State private var isHovering = false
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            configuration.label
+                .foregroundColor(.white)
+                .background(shape.fill(fill))
+                .overlay(shape.strokeBorder(Color.white.opacity(isHovering ? 0.14 : 0.05)))
+                .contentShape(shape)
+                .scaleEffect(configuration.isPressed ? 0.95 : 1)
+                .onHover { isHovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: isHovering)
+                .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+        }
+
+        private var fill: Color {
+            if prominent {
+                return timerColor.opacity(isHovering ? 1 : 0.85)
+            }
+            return Color.white.opacity(isHovering ? 0.14 : 0.07)
+        }
     }
 }
 
@@ -954,7 +1173,7 @@ private struct MediaWidget: View {
                 }
             }
             .onTapGesture {
-                spotifyManager.sourceApp?.activate()
+                spotifyManager.revealSource()
             }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -974,11 +1193,21 @@ private struct MediaWidget: View {
 
                 Spacer(minLength: 4)
 
-                if hasTrack {
-                    HStack(spacing: 16) {
-                        controlButton("backward.fill", size: 11) { mediaControlManager.previousTrack() }
-                        controlButton(spotifyManager.isPlaying ? "pause.fill" : "play.fill", size: 14) { mediaControlManager.playPause() }
-                        controlButton("forward.fill", size: 11) { mediaControlManager.nextTrack() }
+                if hasTrack && spotifyManager.canControl {
+                    HStack(spacing: 8) {
+                        controlButton("backward.fill", size: 11) {
+                            mediaControlManager.previousTrack()
+                            spotifyManager.refreshSoon()
+                        }
+                        controlButton(spotifyManager.isPlaying ? "pause.fill" : "play.fill", size: 14) {
+                            mediaControlManager.playPause()
+                            spotifyManager.showPlaybackToggled()
+                            spotifyManager.refreshSoon()
+                        }
+                        controlButton("forward.fill", size: 11) {
+                            mediaControlManager.nextTrack()
+                            spotifyManager.refreshSoon()
+                        }
                     }
                 }
             }
@@ -1007,10 +1236,570 @@ private struct MediaWidget: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size))
-                .frame(width: 20, height: 20)
+                .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MediaButtonStyle())
+    }
+}
+
+/// Media buttons light up on hover and shrink a little when pressed, so a click shows.
+private struct MediaButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration)
+    }
+
+    private struct Styled: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var isHovering = false
+
+        var body: some View {
+            configuration.label
+                .background(Circle().fill(Color.white.opacity(isHovering ? 0.12 : 0)))
+                .scaleEffect(configuration.isPressed ? 0.85 : 1)
+                .onHover { isHovering = $0 }
+                .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+                .animation(.easeOut(duration: 0.12), value: isHovering)
+        }
+    }
+}
+
+/// Elapsed and remaining time of the track; drag or click the bar to jump within the song.
+private struct MediaProgressBar: View {
+    @EnvironmentObject var spotifyManager: SpotifyManager
+    @EnvironmentObject var mediaControlManager: MediaControlManager
+    var tint: Color = .white
+    var showsTimes = true
+    /// Where the bar is being dragged to, as a share of the track; nil when it isn't.
+    @State private var dragFraction: Double?
+    @State private var isHovering = false
+
+    var body: some View {
+        if spotifyManager.duration > 0 {
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                let duration = spotifyManager.duration
+                let fraction = dragFraction ?? min(spotifyManager.currentPosition(at: context.date) / duration, 1)
+                let position = fraction * duration
+                let isActive = isHovering || dragFraction != nil
+
+                VStack(spacing: 3) {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color.white.opacity(0.2))
+                                .frame(height: isActive ? 6 : 4)
+                            Capsule()
+                                .fill(tint)
+                                .frame(width: geometry.size.width * fraction, height: isActive ? 6 : 4)
+                            if isActive {
+                                Circle()
+                                    .fill(tint)
+                                    .frame(width: 12, height: 12)
+                                    .shadow(color: .black.opacity(0.4), radius: 2)
+                                    .offset(x: geometry.size.width * fraction - 6)
+                            }
+                        }
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    dragFraction = max(0, min(1, value.location.x / geometry.size.width))
+                                }
+                                .onEnded { value in
+                                    let target = max(0, min(1, value.location.x / geometry.size.width)) * duration
+                                    mediaControlManager.seek(to: target)
+                                    spotifyManager.showPosition(target)
+                                    dragFraction = nil
+                                }
+                        )
+                        .onHover { isHovering = $0 }
+                    }
+                    .frame(height: 12)
+                    .animation(.easeOut(duration: 0.12), value: isActive)
+
+                    if showsTimes {
+                        HStack {
+                            Text(formatTrackTime(position))
+                            Spacer()
+                            Text("-" + formatTrackTime(duration - position))
+                        }
+                        .font(.system(size: 9, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundColor(dragFraction != nil ? .white : .gray)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private func formatTrackTime(_ seconds: TimeInterval) -> String {
+    let total = max(0, Int(seconds))
+    return String(format: "%d:%02d", total / 60, total % 60)
+}
+
+/// Spotify and Music show the player with lyrics; YouTube gets its own look around the video.
+private struct MediaTabView: View {
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var spotifyManager: SpotifyManager
+
+    var body: some View {
+        content
+            .overlay(alignment: .topTrailing) {
+                // The YouTube video panel is narrower; the video shows the switcher itself.
+                if spotifyManager.availableSources.count > 1 && !layout.showsVideoPanel {
+                    SourceSwitcher()
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if spotifyManager.sourceApp == .chrome {
+            YouTubeMediaView()
+        } else {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    MediaWidget()
+                    MediaProgressBar()
+                }
+                .frame(width: 230, alignment: .leading)
+                Rectangle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 1)
+                    .padding(.vertical, 6)
+                LyricsView()
+            }
+        }
+    }
+}
+
+private let youTubeRed = Color(red: 1, green: 0, blue: 0.2)
+
+/// Small YouTube logo: a red rounded rectangle with a white play triangle.
+private struct YouTubeLogo: View {
+    var width: CGFloat = 20
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: width / 5, style: .continuous)
+            .fill(youTubeRed)
+            .frame(width: width, height: width * 0.7)
+            .overlay(
+                Image(systemName: "play.fill")
+                    .font(.system(size: width * 0.35))
+                    .foregroundColor(.white)
+            )
+    }
+}
+
+/// Icons of the players that have something loaded; a click shows that player in the Media tab.
+private struct SourceSwitcher: View {
+    @EnvironmentObject var spotifyManager: SpotifyManager
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(spotifyManager.availableSources, id: \.self) { app in
+                let isSelected = spotifyManager.sourceApp == app
+                Button { spotifyManager.select(app) } label: {
+                    icon(app)
+                        .frame(width: 22, height: 22)
+                        .opacity(isSelected ? 1 : 0.45)
+                        .background(Circle().fill(Color.white.opacity(isSelected ? 0.15 : 0)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(app == .chrome ? "YouTube" : app.scriptName)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(Color.black.opacity(0.6)))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.1)))
+        .animation(.easeOut(duration: 0.15), value: spotifyManager.sourceApp)
+    }
+
+    @ViewBuilder
+    private func icon(_ app: MediaPlayerApp) -> some View {
+        if app == .chrome {
+            YouTubeLogo(width: 15)
+        } else if let image = app.icon {
+            Image(nsImage: image)
+                .resizable()
+                .frame(width: 16, height: 16)
+        }
+    }
+}
+
+/// YouTube's own look. The whole video, 16:9 and centered, in a somewhat taller panel, with the title on top and a YouTube-style control bar below shown on hover and while paused; a click on
+/// the picture plays or pauses.
+/// When the video can't be shown, its thumbnail sits on the left with the title beside it.
+private struct YouTubeMediaView: View {
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var spotifyManager: SpotifyManager
+    @EnvironmentObject var mediaControlManager: MediaControlManager
+    @State private var isBlocked = false
+    @State private var isHovering = false
+
+    private var showsVideo: Bool {
+        spotifyManager.canControl && spotifyManager.youTubeVideoID != nil && !isBlocked
+    }
+
+    var body: some View {
+        Group {
+            if showsVideo {
+                player
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HStack(spacing: 16) {
+                    player
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    details
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+        .onChange(of: spotifyManager.youTubeVideoID) {
+            isBlocked = false
+        }
+        .onChange(of: showsVideo, initial: true) { _, shows in
+            layout.setShowsVideoPanel(shows)
+        }
+        .onDisappear {
+            layout.setShowsVideoPanel(false)
+        }
+    }
+
+    private var player: some View {
+        ZStack(alignment: .bottom) {
+            picture
+            if showsVideo && (isHovering || !spotifyManager.isPlaying) {
+                titleBar
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity)
+            }
+            if spotifyManager.canControl && (isHovering || !spotifyManager.isPlaying) {
+                controlBar
+                    .transition(.opacity)
+            }
+            if showsVideo && spotifyManager.availableSources.count > 1 && (isHovering || !spotifyManager.isPlaying) {
+                SourceSwitcher()
+                    .padding(6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.opacity)
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: isHovering)
+        .animation(.easeOut(duration: 0.15), value: spotifyManager.isPlaying)
+    }
+
+    @ViewBuilder
+    private var picture: some View {
+        if spotifyManager.canControl, let videoID = spotifyManager.youTubeVideoID, !isBlocked {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                YouTubeMirrorView(
+                    videoID: videoID,
+                    position: spotifyManager.currentPosition(at: context.date),
+                    isPlaying: spotifyManager.isPlaying,
+                    onBlocked: { isBlocked = $0 }
+                )
+            }
+            .overlay(Color.clear.contentShape(Rectangle()).onTapGesture(perform: togglePlayback))
+        } else {
+            ZStack {
+                Color.black
+                if let image = spotifyManager.artwork {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                }
+                if isBlocked {
+                    VStack {
+                        Text("This video can't play outside YouTube")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.75))
+                            .clipShape(Capsule())
+                            .padding(6)
+                        Spacer()
+                    }
+                }
+            }
+            .onTapGesture { spotifyManager.revealSource() }
+        }
+    }
+
+    /// Red scrubber on top, then play or pause, next and the time, like YouTube's own player.
+    private var controlBar: some View {
+        VStack(spacing: 2) {
+            MediaProgressBar(tint: youTubeRed, showsTimes: false)
+            HStack(spacing: 10) {
+                barButton(spotifyManager.isPlaying ? "pause.fill" : "play.fill", help: spotifyManager.isPlaying ? "Pause" : "Play", action: togglePlayback)
+                barButton("forward.end.fill", help: "Next") {
+                    mediaControlManager.nextTrack()
+                    spotifyManager.refreshSoon()
+                }
+                TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                    Text("\(formatTrackTime(spotifyManager.currentPosition(at: context.date))) / \(formatTrackTime(spotifyManager.duration))")
+                        .font(.system(size: 10, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundColor(.white.opacity(0.9))
+                }
+                Spacer(minLength: 0)
+                barButton("arrow.up.forward.square", help: "Show in Chrome") { spotifyManager.revealSource() }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 18)
+        .padding(.bottom, 4)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
+    }
+
+    /// The title over the top of the video.
+    private var titleBar: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                YouTubeLogo(width: 16)
+                Text(spotifyManager.currentTrack)
+                    .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1)
+            }
+            Text(spotifyManager.currentArtist)
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.7))
+                .lineLimit(1)
+                .padding(.leading, 22)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 10)
+        .padding(.trailing, spotifyManager.availableSources.count > 1 ? 80 : 10)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .background(LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .top, endPoint: .bottom))
+        .allowsHitTesting(false)
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                YouTubeLogo()
+                Text("YouTube")
+                    .font(.system(size: 11, weight: .bold))
+            }
+            .padding(.bottom, 4)
+
+            Text(spotifyManager.currentTrack)
+                .font(.system(size: 13, weight: .bold))
+                .lineLimit(2)
+            Text(spotifyManager.currentArtist)
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            if !spotifyManager.canControl {
+                Text("To play the video here and control it, turn on View › Developer › Allow JavaScript from Apple Events in Chrome.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func togglePlayback() {
+        mediaControlManager.playPause()
+        spotifyManager.showPlaybackToggled()
+        spotifyManager.refreshSoon()
+    }
+
+    private func barButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MediaButtonStyle())
+        .help(help)
+    }
+}
+
+/// Lyrics of the playing track from LRCLIB, following the song line by line when they are timed.
+private struct LyricsView: View {
+    @EnvironmentObject var spotifyManager: SpotifyManager
+    @State private var lyrics: Lyrics?
+    @State private var loadState = LoadState.idle
+
+    private enum LoadState {
+        case idle, loading, loaded, failed
+    }
+
+    private var track: LyricsProvider.Track? {
+        guard spotifyManager.currentTrack != "No Track", spotifyManager.duration > 0 else { return nil }
+        return LyricsProvider.Track(
+            title: spotifyManager.currentTrack,
+            artist: spotifyManager.currentArtist,
+            album: spotifyManager.currentAlbum,
+            duration: spotifyManager.duration
+        )
+    }
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task(id: track) { await load() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch loadState {
+        case .idle:
+            message("music.note", "Play a song to see its lyrics")
+        case .loading:
+            ProgressView()
+                .controlSize(.small)
+        case .failed:
+            message("wifi.exclamationmark", "Couldn't load lyrics")
+        case .loaded:
+            if let lyrics, lyrics.isInstrumental {
+                message("pianokeys", "Instrumental")
+            } else if let lyrics, !lyrics.syncedLines.isEmpty {
+                SyncedLyricsView(lines: lyrics.syncedLines)
+            } else if let text = lyrics?.plainText, !text.isEmpty {
+                ScrollView(showsIndicators: false) {
+                    Text(text)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                message("text.badge.xmark", "No lyrics found")
+            }
+        }
+    }
+
+    private func load() async {
+        lyrics = nil
+        guard let track else {
+            loadState = .idle
+            return
+        }
+        loadState = .loading
+        do {
+            let result = try await LyricsProvider.lyrics(for: track)
+            guard !Task.isCancelled else { return }
+            lyrics = result
+            loadState = .loaded
+        } catch {
+            guard !Task.isCancelled else { return }
+            loadState = .failed
+        }
+    }
+
+    private func message(_ systemImage: String, _ text: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16))
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .multilineTextAlignment(.center)
+        }
+        .foregroundColor(.gray)
+    }
+}
+
+/// Timed lyrics with the current line large and centered; the list scrolls as the song plays.
+private struct SyncedLyricsView: View {
+    @EnvironmentObject var spotifyManager: SpotifyManager
+    @EnvironmentObject var mediaControlManager: MediaControlManager
+    let lines: [Lyrics.Line]
+
+    /// Shows each line a moment early, since the player's position is read every 1.5 seconds.
+    private static let lead: TimeInterval = 0.3
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let current = Lyrics(syncedLines: lines).lineIndex(at: spotifyManager.currentPosition(at: context.date) + Self.lead)
+
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(lines) { line in
+                            Button {
+                                mediaControlManager.seek(to: line.time)
+                                spotifyManager.showPosition(line.time)
+                            } label: {
+                                Text(line.text.isEmpty ? "♪" : line.text)
+                                    .font(.system(size: line.id == current ? 15 : 12, weight: .bold))
+                                    .foregroundColor(.white.opacity(opacity(of: line.id, current: current)))
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(LyricLineStyle())
+                            .help("Play from here")
+                            .id(line.id)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 50)
+                    .animation(.easeOut(duration: 0.25), value: current)
+                }
+                .mask(
+                    LinearGradient(
+                        stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.25),
+                                .init(color: .black, location: 0.75), .init(color: .clear, location: 1)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .onAppear {
+                    if let current { proxy.scrollTo(current, anchor: .center) }
+                }
+                .onChange(of: current) { _, index in
+                    guard let index else { return }
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        proxy.scrollTo(index, anchor: .center)
+                    }
+                }
+            }
+        }
+    }
+
+    private func opacity(of id: Int, current: Int?) -> Double {
+        guard let current else { return 0.45 }
+        if id == current { return 1 }
+        return id < current ? 0.3 : 0.45
+    }
+}
+
+/// A lyric line brightens on hover to show it can be clicked to play from there.
+private struct LyricLineStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Styled(configuration: configuration)
+    }
+
+    private struct Styled: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var isHovering = false
+
+        var body: some View {
+            configuration.label
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(isHovering ? 0.08 : 0)))
+                .brightness(isHovering ? 0.3 : 0)
+                .opacity(configuration.isPressed ? 0.6 : 1)
+                .onHover { isHovering = $0 }
+        }
     }
 }
 

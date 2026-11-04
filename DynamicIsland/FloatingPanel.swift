@@ -5,6 +5,7 @@ import SwiftUI
 /// Tabs of the expanded notch panel, modeled after NotchNook.
 enum NotchTab: String, CaseIterable {
     case nook = "Nook"
+    case media = "Media"
     case alerts = "Alerts"
     case poke = "Poke"
     case timer = "Timer"
@@ -13,6 +14,7 @@ enum NotchTab: String, CaseIterable {
     var icon: String {
         switch self {
         case .nook: return "sparkles"
+        case .media: return "music.note"
         case .alerts: return "bell.fill"
         case .poke: return "hand.point.right.fill"
         case .timer: return "timer"
@@ -44,12 +46,27 @@ class IslandLayout: ObservableObject {
     /// Whether the collapsed island shows the volume or brightness level beside the notch.
     @Published private(set) var showsHUD = false
     @Published private(set) var notchSize: CGSize
+    /// A YouTube video in the Media tab gets a taller panel; the width and tab bar stay the same.
+    @Published private(set) var showsVideoPanel = false
 
     /// Width of the black "wings" shown beside the physical notch while collapsed.
     static let notchWing: CGFloat = 40
     /// The volume and brightness levels take wider wings.
     static let notchHUDWing: CGFloat = 76
-    static let notchExpandedSize = CGSize(width: 640, height: 180)
+    static let notchExpandedWidth: CGFloat = 640
+    static let notchExpandedHeight: CGFloat = 180
+    /// Room around the open panel's content, below the tab bar.
+    static let expandedHorizontalPadding: CGFloat = 20
+    static let expandedTopPadding: CGFloat = 6
+    static let expandedBottomPadding: CGFloat = 14
+    /// Height of the YouTube video in the Media tab; it is 16:9, centered in the panel.
+    static let videoHeight: CGFloat = 200
+    /// Below the tab bar the video panel narrows to the video plus this margin on each side, so
+    /// there is no black beside the video.
+    static let videoBodyMargin: CGFloat = 10
+    static var videoBodyWidth: CGFloat {
+        (videoHeight * 16 / 9).rounded(.up) + videoBodyMargin * 2
+    }
     /// Opening overshoots slightly, like the iPhone's Dynamic Island; closing settles smoothly.
     static let expandAnimation = Animation.spring(response: 0.42, dampingFraction: 0.72)
     static let collapseAnimation = Animation.spring(response: 0.36, dampingFraction: 0.9)
@@ -82,9 +99,19 @@ class IslandLayout: ObservableObject {
         CGSize(width: notchSize.width + Self.notchHUDWing * 2, height: notchSize.height)
     }
 
+    var notchExpandedSize: CGSize {
+        showsVideoPanel ? videoPanelSize : CGSize(width: Self.notchExpandedWidth, height: Self.notchExpandedHeight)
+    }
+
+    /// The usual width and tab bar, with room below for the video.
+    private var videoPanelSize: CGSize {
+        CGSize(width: Self.notchExpandedWidth,
+               height: notchSize.height + Self.expandedTopPadding + Self.videoHeight + Self.expandedBottomPadding)
+    }
+
     var notchWindowSize: CGSize {
         if isExpanded {
-            return Self.notchExpandedWindowSize
+            return notchExpandedWindowSize
         }
         // The level shows over a banner for a moment; the window keeps room for the banner.
         let base = showsBanner ? notchBannerWindowSize : notchCollapsedSize
@@ -96,8 +123,18 @@ class IslandLayout: ObservableObject {
         CGSize(width: notchBannerSize.width + Self.overshootMargin * 2, height: notchBannerSize.height + Self.overshootMargin)
     }
 
-    static var notchExpandedWindowSize: CGSize {
-        CGSize(width: notchExpandedSize.width + overshootMargin * 2, height: notchExpandedSize.height + overshootMargin)
+    var notchExpandedWindowSize: CGSize {
+        Self.windowSize(for: notchExpandedSize)
+    }
+
+    /// The largest the open island gets, for the island view's fixed size inside the window.
+    var notchLargestWindowSize: CGSize {
+        Self.windowSize(for: CGSize(width: max(Self.notchExpandedWidth, videoPanelSize.width),
+                                    height: max(Self.notchExpandedHeight, videoPanelSize.height)))
+    }
+
+    private static func windowSize(for islandSize: CGSize) -> CGSize {
+        CGSize(width: islandSize.width + overshootMargin * 2, height: islandSize.height + overshootMargin)
     }
 
     func toggleExpanded() {
@@ -110,8 +147,21 @@ class IslandLayout: ObservableObject {
 
     func expand() {
         guard !isExpanded else { return }
-        grow(to: Self.notchExpandedWindowSize) {
+        grow(to: notchExpandedWindowSize) {
             self.isExpanded = true
+        }
+    }
+
+    func setShowsVideoPanel(_ shows: Bool) {
+        guard shows != showsVideoPanel else { return }
+        if shows {
+            grow(to: Self.windowSize(for: videoPanelSize)) {
+                self.showsVideoPanel = true
+            }
+        } else {
+            withAnimation(Self.collapseAnimation) {
+                showsVideoPanel = false
+            }
         }
     }
 
@@ -262,6 +312,10 @@ class FloatingPanel: NSPanel {
             // @Published emits before the stored value changes, so read the new state on the next pass.
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
             .store(in: &cancellables)
+        layout.$showsVideoPanel
+            .dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
+            .store(in: &cancellables)
 
         layout.prepareToGrow = { [weak self] size in
             guard let self, self.layout.isPinnedToNotch else { return }
@@ -361,7 +415,7 @@ class FloatingPanel: NSPanel {
         hasShadow = !pinnedToNotch
         // Dark appearance so system colors stay readable against the black notch.
         appearance = pinnedToNotch ? NSAppearance(named: .darkAqua) : nil
-        container.fixedContentSize = pinnedToNotch ? IslandLayout.notchExpandedWindowSize : nil
+        container.fixedContentSize = pinnedToNotch ? layout.notchLargestWindowSize : nil
 
         // @Published emits before the stored value changes, so update on the next run loop pass.
         DispatchQueue.main.async {
@@ -413,6 +467,7 @@ class FloatingPanel: NSPanel {
     @objc private func screensChanged() {
         layout.refreshNotch()
         if layout.isPinnedToNotch {
+            container.fixedContentSize = layout.notchLargestWindowSize
             setNotchSize(layout.notchWindowSize)
         } else {
             reposition()
