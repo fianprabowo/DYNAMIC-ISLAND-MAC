@@ -257,6 +257,12 @@ class NotificationManager: ObservableObject {
         bannerQueue.removeAll { $0.id == id }
     }
 
+    /// Removes every notification of a kind, like all the pokes once the Poke tab shows them.
+    func dismissAll(of type: NotificationType) {
+        notifications.removeAll { $0.type == type }
+        bannerQueue.removeAll { $0.type == type }
+    }
+
     func markAllAsRead() {
         guard unreadCount > 0 else { return }
         for index in notifications.indices {

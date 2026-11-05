@@ -84,6 +84,8 @@ class PokeService: ObservableObject {
     /// The friend being poked from the Poke tab, until Supabase answers.
     @Published private(set) var justPoked: UUID?
     private var justPokedSending: UUID?
+    /// The friend picked in the Poke tab; nil picks the first one.
+    @Published var selectedFriendID: UUID?
     /// The pokes between you and each friend whose chat was opened, newest first.
     @Published private(set) var history: [UUID: [Poke]] = [:]
     /// How many pokes a chat keeps; an older one makes way for a newer one.

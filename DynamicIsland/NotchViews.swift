@@ -1086,6 +1086,8 @@ private struct AlertsView: View {
 
 private struct AlertRow: View {
     @EnvironmentObject var notificationManager: NotificationManager
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var poke: PokeService
     let notification: AppNotification
     @State private var isHovered = false
 
@@ -1128,9 +1130,18 @@ private struct AlertRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .onHover { isHovered = $0 }
         .pointingHandCursor()
-        // Clicking a notification from another app opens that app.
+        // Clicking a poke opens the chat with whoever sent it, where the pokes are, so they leave
+        // the list; a notification from another app opens that app.
         .onTapGesture {
-            notification.open()
+            if notification.type == .poke {
+                if let sender = notification.pokeSenderID {
+                    poke.selectedFriendID = sender
+                }
+                layout.selectedTab = .poke
+                notificationManager.dismissAll(of: .poke)
+            } else {
+                notification.open()
+            }
         }
     }
 }
@@ -3205,13 +3216,12 @@ private struct PokeFriendsView: View {
     @State private var friendCode = ""
     @State private var message = ""
     @State private var copied = false
-    @State private var selectedFriendID: UUID?
     @FocusState private var isMessageFocused: Bool
 
     /// The friend picked on the left, otherwise the first one.
     private var selectedFriend: PokeService.Friend? {
-        guard let selectedFriendID else { return poke.friends.first }
-        return poke.friends.first { $0.id == selectedFriendID }
+        guard let id = poke.selectedFriendID, let friend = poke.friends.first(where: { $0.id == id }) else { return poke.friends.first }
+        return friend
     }
 
     var body: some View {
@@ -3261,7 +3271,7 @@ private struct PokeFriendsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             ForEach(poke.friends) { friend in
                                 FriendRow(friend: friend, isSelected: friend.id == selectedFriend?.id, isPoked: poke.justPoked == friend.id) {
-                                    selectedFriendID = friend.id
+                                    poke.selectedFriendID = friend.id
                                     isMessageFocused = true
                                 }
                             }
