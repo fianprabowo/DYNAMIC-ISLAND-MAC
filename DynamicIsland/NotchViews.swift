@@ -1093,20 +1093,25 @@ private struct AlertRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             NotificationIcon(notification: notification, symbolSize: 13)
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(notification.title)
                     .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                // The whole message wraps (a poke is at most 100 characters); a very long one from
+                // another app stops after a few lines and shows in full on hover.
                 if !notification.body.isEmpty {
                     Text(notification.body)
                         .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(notification.body)
                 }
             }
-            .lineLimit(1)
 
             Spacer(minLength: 0)
 
