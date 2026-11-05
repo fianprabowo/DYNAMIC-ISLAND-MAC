@@ -263,6 +263,12 @@ class NotificationManager: ObservableObject {
         bannerQueue.removeAll { $0.type == type }
     }
 
+    /// Removes a kind from the feed only, leaving its banners to show.
+    func removeFromFeed(_ type: NotificationType) {
+        guard notifications.contains(where: { $0.type == type }) else { return }
+        notifications.removeAll { $0.type == type }
+    }
+
     func markAllAsRead() {
         guard unreadCount > 0 else { return }
         for index in notifications.indices {

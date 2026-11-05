@@ -3122,6 +3122,7 @@ private struct ClaudeWorkingIcon: View {
 /// Supabase project's URL and anon key, then your name; friends are added with their code.
 private struct PokeView: View {
     @EnvironmentObject var poke: PokeService
+    @EnvironmentObject var notificationManager: NotificationManager
 
     var body: some View {
         Group {
@@ -3151,6 +3152,11 @@ private struct PokeView: View {
             }
         }
         .onAppear(perform: poke.refreshFriends)
+        // Pokes are read here, in the chats, so they leave Alerts while this tab is open; a poke
+        // arriving meanwhile still shows its banner.
+        .onChange(of: notificationManager.notifications.count, initial: true) {
+            notificationManager.removeFromFeed(.poke)
+        }
     }
 }
 
