@@ -1561,6 +1561,7 @@ private struct SettingsMenu: View {
     @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var hud: HUDMonitor
+    @AppStorage(PokeSound.key) private var pokeSound = PokeSound.defaultName
 
     var body: some View {
         Menu {
@@ -1571,6 +1572,7 @@ private struct SettingsMenu: View {
                 Toggle("Poke Effects", isOn: $layout.pokeEffects)
                 Toggle("Bouncy Opening", isOn: $layout.bouncyOpen)
             }
+            pokeSoundMenu
             Toggle("Launch at Login", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.isEnabled = $0 }))
             Picker("Theme", selection: Binding(get: { themeManager.currentPreset }, set: { themeManager.setTheme($0) })) {
                 ForEach(ThemeManager.ThemePreset.allCases, id: \.self) { preset in
@@ -1593,6 +1595,31 @@ private struct SettingsMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .tint(.gray)
+        .onAppear(perform: PokeSound.previewOnHover)
+    }
+
+    /// Resting on a sound plays it, and so does picking one; your own sounds (in ~/Library/Sounds) come first.
+    private var pokeSoundMenu: some View {
+        Menu(PokeSound.menuTitle) {
+            let custom = PokeSound.customNames
+            ForEach(custom, id: \.self) { soundItem($0) }
+            if !custom.isEmpty {
+                Divider()
+            }
+            ForEach(PokeSound.systemNames, id: \.self) { soundItem($0) }
+            Divider()
+            Button("Choose Sound File…") {
+                PokeSound.importFile()
+                pokeSound = PokeSound.name
+            }
+        }
+    }
+
+    private func soundItem(_ name: String) -> some View {
+        Toggle(name, isOn: Binding(get: { pokeSound == name }, set: { _ in
+            pokeSound = name
+            PokeSound.play(name)
+        }))
     }
 }
 

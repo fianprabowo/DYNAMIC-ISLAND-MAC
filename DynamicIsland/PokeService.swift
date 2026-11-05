@@ -526,9 +526,10 @@ class PokeService: ObservableObject {
         }
         let notification = AppNotification(type: .poke, title: title, body: body, actionTitle: "Poke Back", pokeSenderID: poke.senderID, pokeSenderName: poke.senderName)
         notificationManager.postActivity(notification, keepInFeed: true)
-        // Ping rings on for a moment, so it's heard even when you're not looking at the notch.
+        // The poke sound (Ping unless another is picked in Settings), so it's heard even when
+        // you're not looking at the notch.
         if !FocusStatus.isActive {
-            NSSound(named: "Ping")?.play()
+            PokeSound.play()
         }
     }
 
