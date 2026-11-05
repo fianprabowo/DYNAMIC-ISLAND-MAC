@@ -1,0 +1,27 @@
+DynamicIsland/FloatingPanel.swift
+  s_8d4b63dc56ae38::t_621d511c536943 41-52,97-103,112-114,119-121,129-131,271,276
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_31963a51b7b64b 18-21,29-36,40-58,126-138,156-158,243-247,260-266,291,360,1167-1171
+DynamicIsland/PlayfulEffects.swift
+  s_8d4b63dc56ae38::t_0648f6b42418f5 1-558
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_dfb993458406d2 484-485
+README.md
+  s_8d4b63dc56ae38::t_74dc0480f85c41 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "273786e41dcaf8f2e6441d5537dc9a3a3a4c2b4c",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
