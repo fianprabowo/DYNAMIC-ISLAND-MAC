@@ -764,13 +764,21 @@ private struct VPNProfileTile: View {
 
     private var isBusy: Bool { vpn.busy.contains(profile.id) }
     private var isAskingPIN: Bool { vpn.askingPIN == profile.id }
-    private var isConnecting: Bool { profile.isConnecting || (isBusy && !profile.isConnected) }
+    private var isDisconnecting: Bool { vpn.disconnecting.contains(profile.id) }
+    private var isConnecting: Bool { !isDisconnecting && (profile.isConnecting || (isBusy && !profile.isConnected)) }
+
+    /// Green while connected, orange while connecting, red while disconnecting, none when off.
+    private var borderColor: Color {
+        if isDisconnecting { return .red }
+        if profile.isConnected { return vpnColor }
+        return isConnecting ? Color.orange.opacity(0.7) : .clear
+    }
 
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: profile.isConnected ? "lock.shield.fill" : "lock.open")
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(profile.isConnected ? vpnColor : isConnecting ? .orange : .gray)
+                .foregroundColor(isDisconnecting ? .red : profile.isConnected ? vpnColor : isConnecting ? .orange : .gray)
                 .frame(height: 24)
 
             Text(profile.name)
@@ -817,9 +825,10 @@ private struct VPNProfileTile: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(profile.isConnected ? vpnColor : isConnecting ? Color.orange.opacity(0.7) : .clear, lineWidth: 1.5)
+                .strokeBorder(borderColor, lineWidth: 1.5)
         )
         .animation(.easeInOut(duration: 0.2), value: profile.isConnected)
+        .animation(.easeInOut(duration: 0.15), value: isDisconnecting)
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onTapGesture(perform: toggle)
         .onHover { isHovered = $0 }

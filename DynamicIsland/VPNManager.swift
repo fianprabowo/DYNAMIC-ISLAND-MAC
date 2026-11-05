@@ -43,6 +43,8 @@ class VPNManager: ObservableObject {
     @Published private(set) var profiles: [Profile] = []
     /// Profiles being connected or disconnected from the notch.
     @Published private(set) var busy: Set<String> = []
+    /// Profiles being disconnected from the notch.
+    @Published private(set) var disconnecting: Set<String> = []
     /// The profile waiting for its PIN to be typed in the VPN tab.
     @Published var askingPIN: String?
     @Published var error: String?
@@ -58,6 +60,8 @@ class VPNManager: ObservableObject {
     private let refreshInterval: TimeInterval = 5
     /// How long a connection may take before the notch stops waiting for it.
     private let connectTimeout: TimeInterval = 45
+    /// How long to wait for Pritunl to report a connection stopped.
+    private let disconnectTimeout: TimeInterval = 10
     private let notificationManager = NotificationManager.shared
 
     private init() {
@@ -97,13 +101,23 @@ class VPNManager: ObservableObject {
         }
     }
 
+    /// Disconnects; the profile stays in `disconnecting` until Pritunl reports it stopped.
     func disconnect(_ profile: Profile) {
         error = nil
         busy.insert(profile.id)
+        disconnecting.insert(profile.id)
         Task {
+            defer {
+                busy.remove(profile.id)
+                disconnecting.remove(profile.id)
+            }
             await CommandRunner.run(Self.cliPath, ["stop", profile.id])
-            await refresh()
-            busy.remove(profile.id)
+            let started = Date()
+            repeat {
+                await refresh()
+                guard profiles.first(where: { $0.id == profile.id })?.isActive == true else { return }
+                try? await Task.sleep(for: .seconds(1))
+            } while Date().timeIntervalSince(started) < disconnectTimeout
         }
     }
 
