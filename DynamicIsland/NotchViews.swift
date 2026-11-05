@@ -394,11 +394,12 @@ private struct NotchBannerView: View {
         notification.pokeSenderName ?? "them"
     }
 
-    /// A friend's poke is replied to on the banner; anything else opens.
+    /// A poke opens the Poke tab, on the chat with whoever sent it; anything else opens.
     private func open() {
-        if notification.pokeSenderID != nil {
-            startReply()
-        } else if notification.type == .poke {
+        if notification.type == .poke {
+            if let sender = notification.pokeSenderID {
+                PokeService.shared.selectedFriendID = sender
+            }
             layout.selectedTab = .poke
             layout.expand()
             notificationManager.dismissBanner()
