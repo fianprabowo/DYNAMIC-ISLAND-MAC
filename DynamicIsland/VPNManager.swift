@@ -6,9 +6,10 @@ import Security
 /// client's command-line tool. Pritunl's own service does the connecting, so the Pritunl app shows
 /// the same state, and connections started there show here too.
 ///
-/// Profiles that ask for a PIN get it from the keychain. The PIN is asked once, in the VPN tab, and
-/// then used for every profile (a Pritunl PIN belongs to the user, not the profile); a profile whose
-/// server turns it down asks for its own.
+/// Profiles that ask for a PIN get it from `PRITUNL_PIN` in the user's zsh config, otherwise from the
+/// keychain. A PIN that's in neither is asked once, in the VPN tab, and then used for every profile
+/// (a Pritunl PIN belongs to the user, not the profile); a profile whose server turns it down asks
+/// for its own.
 class VPNManager: ObservableObject {
     static let shared = VPNManager()
 
@@ -75,14 +76,20 @@ class VPNManager: ObservableObject {
         VPNPINStore.pin(for: profile.id) != nil
     }
 
-    /// Connects with the saved PIN, or asks for it first.
+    /// Connects with the PIN from the zsh config or the keychain, or asks for it first.
     func connect(_ profile: Profile) {
         error = nil
-        guard let pin = VPNPINStore.pin(for: profile.id) else {
-            askingPIN = profile.id
-            return
+        busy.insert(profile.id)
+        Task {
+            defer { busy.remove(profile.id) }
+            if let pin = await Self.shellPIN() {
+                await start(profile, pin: pin, from: .shell)
+            } else if let pin = VPNPINStore.pin(for: profile.id) {
+                await start(profile, pin: pin, from: .keychain)
+            } else {
+                askingPIN = profile.id
+            }
         }
-        start(profile, pin: pin)
     }
 
     /// The PIN typed in the VPN tab; it's kept in the keychain once the connection comes up.
@@ -90,7 +97,12 @@ class VPNManager: ObservableObject {
         let pin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pin.isEmpty else { return }
         askingPIN = nil
-        start(profile, pin: pin, saveOnSuccess: true)
+        error = nil
+        busy.insert(profile.id)
+        Task {
+            defer { busy.remove(profile.id) }
+            await start(profile, pin: pin, from: .typed)
+        }
     }
 
     func disconnect(_ profile: Profile) {
@@ -109,37 +121,65 @@ class VPNManager: ObservableObject {
         objectWillChange.send()
     }
 
-    private func start(_ profile: Profile, pin: String, saveOnSuccess: Bool = false) {
-        busy.insert(profile.id)
-        Task {
-            defer { busy.remove(profile.id) }
-            // Typed in at Pritunl's prompt: as an argument (--password) any process could read it.
-            guard await CommandRunner.run(Self.cliPath, ["start", profile.id, "--password-read"], typing: pin) != nil else {
-                error = "Pritunl couldn't start \(profile.name). Is the Pritunl service running?"
+    /// Where the PIN for a connection came from.
+    private enum PINSource { case shell, keychain, typed }
+
+    private func start(_ profile: Profile, pin: String, from source: PINSource) async {
+        // Typed in at Pritunl's prompt: as an argument (--password) any process could read it.
+        guard await CommandRunner.run(Self.cliPath, ["start", profile.id, "--password-read"], typing: pin) != nil else {
+            error = "Pritunl couldn't start \(profile.name). Is the Pritunl service running?"
+            return
+        }
+        // Pritunl answers at once and connects in the background; wait until it's up or gave up.
+        let started = Date()
+        while Date().timeIntervalSince(started) < connectTimeout {
+            try? await Task.sleep(for: .seconds(1))
+            await refresh()
+            guard let current = profiles.first(where: { $0.id == profile.id }) else { return }
+            if current.isConnected {
+                if source == .typed {
+                    VPNPINStore.save(pin, for: profile.id)
+                    VPNPINStore.save(pin, for: VPNPINStore.defaultAccount)
+                }
                 return
             }
-            // Pritunl answers at once and connects in the background; wait until it's up or gave up.
-            let started = Date()
-            while Date().timeIntervalSince(started) < connectTimeout {
-                try? await Task.sleep(for: .seconds(1))
-                await refresh()
-                guard let current = profiles.first(where: { $0.id == profile.id }) else { return }
-                if current.isConnected {
-                    if saveOnSuccess {
-                        VPNPINStore.save(pin, for: profile.id)
-                        VPNPINStore.save(pin, for: VPNPINStore.defaultAccount)
-                    }
-                    return
-                }
-                // It stopped trying: most likely the PIN was turned down.
-                if !current.isActive && Date().timeIntervalSince(started) > 3 {
+            // It stopped trying: most likely the PIN was turned down.
+            if !current.isActive && Date().timeIntervalSince(started) > 3 {
+                switch source {
+                case .shell:
+                    error = "Pritunl turned down the PIN in \(Self.pinVariable) in your zsh config. Fix it there, or type the PIN."
+                case .keychain:
                     VPNPINStore.remove(for: profile.id)
                     error = "Couldn't connect to \(profile.name). Check the PIN and try again."
-                    askingPIN = profile.id
-                    return
+                case .typed:
+                    error = "Couldn't connect to \(profile.name). Check the PIN and try again."
                 }
+                askingPIN = profile.id
+                return
             }
         }
+    }
+
+    /// The zsh variable that holds the PIN, e.g. `PRITUNL_PIN=123456` in `~/.zshrc`. It needn't be
+    /// exported, which keeps it out of the environment of every program started from a terminal.
+    static let pinVariable = "PRITUNL_PIN"
+
+    /// The PIN from the app's own environment (when opened from a terminal), otherwise as the
+    /// user's zsh sets it up: launchd opens the app, and it reads no zsh config. The shell prints
+    /// the PIN between markers, so whatever its startup files print is left out, and the PIN is
+    /// never in a command line.
+    private static func shellPIN() async -> String? {
+        if let pin = ProcessInfo.processInfo.environment[pinVariable]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pin.isEmpty {
+            return pin
+        }
+        let begin = "<dynamic-island-pin>", end = "</dynamic-island-pin>"
+        guard let data = await CommandRunner.run("/bin/zsh", ["-l", "-i", "-c", "print -rn -- '\(begin)'\"${\(pinVariable)}\"'\(end)'"], timeout: 15),
+              let output = String(data: data, encoding: .utf8),
+              let opening = output.range(of: begin),
+              let closing = output.range(of: end, range: opening.upperBound..<output.endIndex) else { return nil }
+        let pin = output[opening.upperBound..<closing.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return pin.isEmpty ? nil : pin
     }
 
     private func refresh() async {

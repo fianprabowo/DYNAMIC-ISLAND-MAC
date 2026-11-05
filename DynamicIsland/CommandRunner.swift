@@ -5,14 +5,17 @@ import Foundation
 nonisolated enum CommandRunner {
     private static let queue = DispatchQueue(label: "CommandRunner", attributes: .concurrent)
 
-    /// The tool's output, or nil if it couldn't start or failed.
+    /// The tool's output, or nil if it couldn't start or failed. With a `timeout`, a tool still
+    /// running after that many seconds is stopped.
     @discardableResult
-    static func run(_ path: String, _ arguments: [String]) async -> Data? {
+    static func run(_ path: String, _ arguments: [String], timeout: TimeInterval? = nil) async -> Data? {
         await withCheckedContinuation { continuation in
             queue.async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: path)
                 process.arguments = arguments
+                // Nothing is typed in, so a tool (or a shell's startup files) can't wait for input.
+                process.standardInput = FileHandle.nullDevice
                 let output = Pipe()
                 process.standardOutput = output
                 process.standardError = FileHandle.nullDevice
@@ -22,9 +25,18 @@ nonisolated enum CommandRunner {
                     continuation.resume(returning: nil)
                     return
                 }
+                let watchdog = DispatchWorkItem { [weak process] in
+                    if process?.isRunning == true {
+                        process?.terminate()
+                    }
+                }
+                if let timeout {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+                }
                 // Read before waiting: a full pipe would block the tool from exiting.
                 let data = output.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
+                watchdog.cancel()
                 continuation.resume(returning: process.terminationStatus == 0 ? data : nil)
             }
         }
