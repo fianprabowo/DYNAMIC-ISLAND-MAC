@@ -1,0 +1,28 @@
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_ed3151152134af 442
+  s_8d4b63dc56ae38::t_1ff326bb76a2eb 122
+  s_8d4b63dc56ae38::t_e450f152785d83 304-307
+  s_8d4b63dc56ae38::t_ca336d1768e4a1 393-425,427-435,441,443-444,447-448
+  s_8d4b63dc56ae38::t_eba8694e324a46 84-95
+  s_8d4b63dc56ae38::t_39515ced95c74b 426
+README.md
+  s_8d4b63dc56ae38::t_876bb43c3e8d59 30,126
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_415a63b19f83a8 3137-3138,3148,3150-3154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "2e324a1119db262e5852e434ac9e6a9637bbba32",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
