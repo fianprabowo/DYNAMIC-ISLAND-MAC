@@ -3613,6 +3613,9 @@ private struct PokeFriendsView: View {
     @State private var friendCode = ""
     @State private var message = ""
     @State private var copied = false
+    @State private var showsEmoji = false
+    /// Where the emoji popup starts: just below the message field.
+    @State private var messageRowHeight: CGFloat = 46
     @FocusState private var isMessageFocused: Bool
 
     /// The friend picked on the left, otherwise the first one.
@@ -3686,17 +3689,30 @@ private struct PokeFriendsView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top, spacing: 10) {
-                    TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .lineLimit(2, reservesSpace: true)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .background(Color.white.opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .focused($isMessageFocused)
-                        .onSubmit(send)
-                        .disabled(selectedFriend == nil)
+                    HStack(alignment: .top, spacing: 6) {
+                        TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .lineLimit(2, reservesSpace: true)
+                            .focused($isMessageFocused)
+                            .onSubmit(send)
+                            .onExitCommand { showsEmoji = false }
+
+                        Button { showsEmoji.toggle() } label: {
+                            Image(systemName: "face.smiling")
+                                .font(.system(size: 14))
+                                .foregroundColor(showsEmoji ? .white : .gray)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                        .help("Emoji")
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(Color.white.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .disabled(selectedFriend == nil)
 
                     Button(action: send) {
                         VStack(spacing: 4) {
@@ -3720,6 +3736,18 @@ private struct PokeFriendsView: View {
                     .help(selectedFriend.map { "Poke \($0.name)" } ?? "")
                 }
                 .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messageRowHeight = $0 }
+                // The emoji popup drops down from the field, over the chat below it. Above the field
+                // it would reach into the tab bar, behind the Mac's own notch.
+                .overlay(alignment: .topTrailing) {
+                    if showsEmoji {
+                        PokeEmojiPopup(onPick: addEmoji)
+                            .offset(y: messageRowHeight + 4)
+                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: showsEmoji)
+                .zIndex(1)
 
                 if let error = poke.actionError {
                     PokeError(message: error)
@@ -3727,9 +3755,18 @@ private struct PokeFriendsView: View {
 
                 if let friend = selectedFriend {
                     PokeChat(friend: friend)
+                        // A click beside the open popup closes it, like in other messengers.
+                        .overlay {
+                            if showsEmoji {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { showsEmoji = false }
+                            }
+                        }
                 }
             }
         }
+        .onChange(of: selectedFriend?.id) { showsEmoji = false }
         .task(id: selectedFriend?.id) {
             if let id = selectedFriend?.id {
                 await poke.loadHistory(with: id)
@@ -3745,11 +3782,73 @@ private struct PokeFriendsView: View {
         guard let friend = selectedFriend else { return }
         poke.poke(friend.id, name: friend.name, message: message)
         message = ""
+        showsEmoji = false
+    }
+
+    /// Adds the emoji at the end of the message, if it still fits, and goes back to typing.
+    private func addEmoji(_ emoji: String) {
+        if message.unicodeScalars.count + emoji.unicodeScalars.count <= PokeEmojiPopup.messageLimit {
+            message += emoji
+        }
+        isMessageFocused = true
     }
 
     private func addFriend() {
         poke.addFriend(code: friendCode)
         friendCode = ""
+    }
+}
+
+/// The emoji the smiley in the message field opens, like other messengers' emoji popups. A click
+/// adds one to the message and leaves the popup open for more; it closes with the smiley again,
+/// Escape, a click beside it, or sending. It's drawn in the panel rather than as a popover window,
+/// which would sit outside the notch and close it.
+private struct PokeEmojiPopup: View {
+    let onPick: (String) -> Void
+
+    /// The same 100 characters a poke's message may have, counted the way Postgres counts them.
+    static let messageLimit = 100
+
+    private static let emoji = [
+        "👋", "👉", "😂", "🤣", "😊", "😍", "🥰", "😘", "😎", "🤔", "😴", "😭",
+        "😡", "😱", "🙈", "🙏", "👍", "👎", "👏", "🙌", "💪", "🤝", "🔥", "❤️",
+        "💯", "🎉", "✅", "⏰", "☕️", "🍜", "🍕", "🍺", "💻", "🐛", "🚀", "😅",
+    ]
+    private static let cell: CGFloat = 22
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(Self.cell), spacing: 1), count: 12), spacing: 1) {
+            ForEach(Self.emoji, id: \.self) { emoji in
+                EmojiButton(emoji: emoji, size: Self.cell) { onPick(emoji) }
+            }
+        }
+        .padding(4)
+        .background(Color(white: 0.17))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.12)))
+        .shadow(color: .black.opacity(0.5), radius: 8, y: 3)
+        .fixedSize()
+    }
+
+    private struct EmojiButton: View {
+        let emoji: String
+        let size: CGFloat
+        let action: () -> Void
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(action: action) {
+                Text(emoji)
+                    .font(.system(size: 14))
+                    .frame(width: size, height: size)
+                    .background(Color.white.opacity(isHovered ? 0.18 : 0))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .onHover { isHovered = $0 }
+        }
     }
 }
 
