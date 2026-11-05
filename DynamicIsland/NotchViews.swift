@@ -703,10 +703,20 @@ private struct NotchExpandedView: View {
 }
 
 // MARK: - VPN
-/// Pritunl's profiles: each connects or disconnects with a click. A profile's PIN is asked once
-/// and kept in the keychain.
+/// Pritunl's profiles: each connects or disconnects with a click. A profile's PIN comes from
+/// PRITUNL_PIN in the zsh config, or is typed for one connection.
 private struct VPNView: View {
     @EnvironmentObject var vpn: VPNManager
+
+    /// Square tiles side by side, as many to a row as fit, spread evenly across the width.
+    static let tileSize: CGFloat = 112
+    private let tileSpacing: CGFloat = 10
+
+    private func columns(for width: CGFloat) -> [GridItem] {
+        let fit = max(1, Int((width + tileSpacing) / (Self.tileSize + tileSpacing)))
+        let count = min(max(vpn.profiles.count, 1), fit)
+        return Array(repeating: GridItem(.flexible(), spacing: tileSpacing, alignment: .center), count: count)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -715,14 +725,16 @@ private struct VPNView: View {
             } else if vpn.profiles.isEmpty {
                 emptyMessage("No profiles yet. Import one in the Pritunl app.")
             } else {
-                ScrollView {
-                    VStack(spacing: 4) {
-                        ForEach(vpn.profiles) { profile in
-                            VPNProfileRow(profile: profile)
+                GeometryReader { geometry in
+                    ScrollView {
+                        LazyVGrid(columns: columns(for: geometry.size.width), spacing: tileSpacing) {
+                            ForEach(vpn.profiles) { profile in
+                                VPNProfileTile(profile: profile)
+                            }
                         }
                     }
+                    .scrollIndicators(.never)
                 }
-                .scrollIndicators(.never)
             }
             if let error = vpn.error {
                 Text(error)
@@ -741,7 +753,9 @@ private struct VPNView: View {
     }
 }
 
-private struct VPNProfileRow: View {
+/// One profile as a square tile: clicking it connects, or disconnects while it's connected. A green
+/// border shows it's connected, how long for underneath; the address it got shows on hover.
+private struct VPNProfileTile: View {
     @EnvironmentObject var vpn: VPNManager
     let profile: VPNManager.Profile
     @State private var pin = ""
@@ -750,86 +764,83 @@ private struct VPNProfileRow: View {
 
     private var isBusy: Bool { vpn.busy.contains(profile.id) }
     private var isAskingPIN: Bool { vpn.askingPIN == profile.id }
+    private var isConnecting: Bool { profile.isConnecting || (isBusy && !profile.isConnected) }
 
     var body: some View {
-        HStack(spacing: 10) {
+        VStack(spacing: 6) {
             Image(systemName: profile.isConnected ? "lock.shield.fill" : "lock.open")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(profile.isConnected ? vpnColor : profile.isConnecting ? .orange : .gray)
-                .frame(width: 18)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(profile.isConnected ? vpnColor : isConnecting ? .orange : .gray)
+                .frame(height: 24)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(profile.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                Text(status)
-                    .font(.system(size: 10))
-                    .foregroundColor(.gray)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
+            Text(profile.name)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
 
             if isAskingPIN {
                 SecureField("PIN", text: $pin)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .frame(width: 110)
+                    .font(.system(size: 10))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
                     .background(Color.white.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
                     .focused($isPINFocused)
                     .onSubmit(submitPIN)
                     .onExitCommand { vpn.askingPIN = nil }
                     .onAppear { isPINFocused = true }
-                VPNButton(title: "Connect", color: vpnColor, action: submitPIN)
-                    .disabled(pin.isEmpty)
+            } else if profile.isConnected {
+                // Counts every second between Pritunl's reads, like Pritunl's own "Online For".
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(formatUptime(profile.uptime + Int(context.date.timeIntervalSince(vpn.refreshedAt))))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(vpnColor)
+                        .monospacedDigit()
+                }
+            } else if isBusy || isConnecting {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(height: 13)
             } else {
-                if isHovered && !profile.isActive && vpn.hasSavedPIN(profile) {
-                    Button { vpn.forgetPIN(profile) } label: {
-                        Image(systemName: "key.slash")
-                            .font(.system(size: 10))
-                            .foregroundColor(.gray)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Forget the saved PIN")
-                }
-                if profile.isConnected {
-                    // Counts every second between Pritunl's reads, like Pritunl's own "Online For".
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(formatUptime(profile.uptime + Int(context.date.timeIntervalSince(vpn.refreshedAt))))
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(vpnColor)
-                            .monospacedDigit()
-                    }
-                }
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .frame(width: 70)
-                } else if profile.isActive {
-                    VPNButton(title: "Disconnect", color: .red) { vpn.disconnect(profile) }
-                } else {
-                    VPNButton(title: "Connect", color: vpnColor) { vpn.connect(profile) }
-                }
+                Text("Off")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(8)
+        .frame(width: VPNView.tileSize, height: VPNView.tileSize)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(profile.isConnected ? vpnColor.opacity(0.12) : Color.white.opacity(isHovered ? 0.08 : 0.04))
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.white.opacity(isHovered ? 0.1 : 0.05))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(profile.isConnected ? vpnColor : isConnecting ? Color.orange.opacity(0.7) : .clear, lineWidth: 1.5)
+        )
+        .animation(.easeInOut(duration: 0.2), value: profile.isConnected)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onTapGesture(perform: toggle)
         .onHover { isHovered = $0 }
+        .help(help)
     }
 
-    private var status: String {
+    private var help: String {
         if profile.isConnected {
-            return profile.clientAddress.isEmpty ? "Connected" : "Connected · \(profile.clientAddress)"
+            let address = profile.clientAddress.isEmpty ? "" : " · \(profile.clientAddress)"
+            return "\(profile.name)\(address)\nClick to disconnect"
         }
-        return profile.isConnecting || isBusy ? "Connecting…" : "Disconnected"
+        return isConnecting ? "\(profile.name)\nConnecting… click to stop" : "\(profile.name)\nClick to connect"
+    }
+
+    private func toggle() {
+        guard !isAskingPIN, !isBusy else { return }
+        if profile.isActive {
+            vpn.disconnect(profile)
+        } else {
+            vpn.connect(profile)
+        }
     }
 
     private func submitPIN() {
@@ -847,25 +858,6 @@ private struct VPNProfileRow: View {
             return String(format: "%dh %02dm %02ds", hours, minutes, rest)
         }
         return minutes > 0 ? String(format: "%dm %02ds", minutes, rest) : "\(rest)s"
-    }
-}
-
-private struct VPNButton: View {
-    let title: String
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 70)
-                .padding(.vertical, 3)
-                .background(color)
-                .clipShape(Capsule())
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
     }
 }
 

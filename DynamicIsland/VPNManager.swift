@@ -1,15 +1,13 @@
 import Foundation
 import Combine
-import Security
 
 /// The Pritunl VPN client's profiles, connected and disconnected from the notch through the
 /// client's command-line tool. Pritunl's own service does the connecting, so the Pritunl app shows
 /// the same state, and connections started there show here too.
 ///
-/// Profiles that ask for a PIN get it from `PRITUNL_PIN` in the user's zsh config, otherwise from the
-/// keychain. A PIN that's in neither is asked once, in the VPN tab, and then used for every profile
-/// (a Pritunl PIN belongs to the user, not the profile); a profile whose server turns it down asks
-/// for its own.
+/// Profiles that ask for a PIN get it from `PRITUNL_PIN` in the user's zsh config, used for every
+/// profile (a Pritunl PIN belongs to the user, not the profile). Without it, the PIN is typed in the
+/// VPN tab for each connection. The app never keeps the PIN itself: not in the keychain, not on disk.
 class VPNManager: ObservableObject {
     static let shared = VPNManager()
 
@@ -72,11 +70,7 @@ class VPNManager: ObservableObject {
         }
     }
 
-    func hasSavedPIN(_ profile: Profile) -> Bool {
-        VPNPINStore.pin(for: profile.id) != nil
-    }
-
-    /// Connects with the PIN from the zsh config or the keychain, or asks for it first.
+    /// Connects with the PIN from the zsh config, or asks for it.
     func connect(_ profile: Profile) {
         error = nil
         busy.insert(profile.id)
@@ -84,15 +78,13 @@ class VPNManager: ObservableObject {
             defer { busy.remove(profile.id) }
             if let pin = await Self.shellPIN() {
                 await start(profile, pin: pin, from: .shell)
-            } else if let pin = VPNPINStore.pin(for: profile.id) {
-                await start(profile, pin: pin, from: .keychain)
             } else {
                 askingPIN = profile.id
             }
         }
     }
 
-    /// The PIN typed in the VPN tab; it's kept in the keychain once the connection comes up.
+    /// The PIN typed in the VPN tab, for this connection only; it isn't kept.
     func connect(_ profile: Profile, pin: String) {
         let pin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pin.isEmpty else { return }
@@ -115,14 +107,8 @@ class VPNManager: ObservableObject {
         }
     }
 
-    func forgetPIN(_ profile: Profile) {
-        VPNPINStore.remove(for: profile.id)
-        VPNPINStore.remove(for: VPNPINStore.defaultAccount)
-        objectWillChange.send()
-    }
-
     /// Where the PIN for a connection came from.
-    private enum PINSource { case shell, keychain, typed }
+    private enum PINSource { case shell, typed }
 
     private func start(_ profile: Profile, pin: String, from source: PINSource) async {
         // Typed in at Pritunl's prompt: as an argument (--password) any process could read it.
@@ -137,10 +123,6 @@ class VPNManager: ObservableObject {
             await refresh()
             guard let current = profiles.first(where: { $0.id == profile.id }) else { return }
             if current.isConnected {
-                if source == .typed {
-                    VPNPINStore.save(pin, for: profile.id)
-                    VPNPINStore.save(pin, for: VPNPINStore.defaultAccount)
-                }
                 return
             }
             // It stopped trying: most likely the PIN was turned down.
@@ -148,9 +130,6 @@ class VPNManager: ObservableObject {
                 switch source {
                 case .shell:
                     error = "Pritunl turned down the PIN in \(Self.pinVariable) in your zsh config. Fix it there, or type the PIN."
-                case .keychain:
-                    VPNPINStore.remove(for: profile.id)
-                    error = "Couldn't connect to \(profile.name). Check the PIN and try again."
                 case .typed:
                     error = "Couldn't connect to \(profile.name). Check the PIN and try again."
                 }
@@ -205,49 +184,5 @@ class VPNManager: ObservableObject {
                 notificationManager.postActivity(AppNotification(type: .vpn, title: "VPN disconnected", body: profile.name, symbol: "lock.open.fill"))
             }
         }
-    }
-}
-
-/// Pritunl PINs in the login keychain: one per profile that needed its own, and a default for the rest.
-nonisolated enum VPNPINStore {
-    private static let service = "Dynamic Island · Pritunl PIN"
-    static let defaultAccount = "default"
-
-    /// The profile's own PIN, otherwise the default one.
-    static func pin(for profileID: String) -> String? {
-        storedPIN(for: profileID) ?? storedPIN(for: defaultAccount)
-    }
-
-    private static func storedPIN(for profileID: String) -> String? {
-        var query = baseQuery(profileID)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func save(_ pin: String, for profileID: String) {
-        let data = Data(pin.utf8)
-        let query = baseQuery(profileID)
-        if SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
-            var item = query
-            item[kSecValueData as String] = data
-            item[kSecAttrLabel as String] = service
-            SecItemAdd(item as CFDictionary, nil)
-        }
-    }
-
-    static func remove(for profileID: String) {
-        SecItemDelete(baseQuery(profileID) as CFDictionary)
-    }
-
-    private static func baseQuery(_ profileID: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: profileID,
-        ]
     }
 }
