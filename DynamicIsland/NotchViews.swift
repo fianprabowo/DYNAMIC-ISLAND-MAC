@@ -3282,7 +3282,7 @@ private struct PokeFriendsView: View {
                     TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
-                        .lineLimit(4, reservesSpace: true)
+                        .lineLimit(2, reservesSpace: true)
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         .background(Color.white.opacity(0.1))
@@ -3317,6 +3317,15 @@ private struct PokeFriendsView: View {
                 if let error = poke.actionError {
                     PokeError(message: error)
                 }
+
+                if let friend = selectedFriend {
+                    PokeChat(friend: friend)
+                }
+            }
+        }
+        .task(id: selectedFriend?.id) {
+            if let id = selectedFriend?.id {
+                await poke.loadHistory(with: id)
             }
         }
     }
@@ -3334,6 +3343,64 @@ private struct PokeFriendsView: View {
     private func addFriend() {
         poke.addFriend(code: friendCode)
         friendCode = ""
+    }
+}
+
+/// The latest pokes between you and a friend, newest on top, like "jho: see you".
+private struct PokeChat: View {
+    @EnvironmentObject var poke: PokeService
+    let friend: PokeService.Friend
+
+    var body: some View {
+        let pokes = poke.history[friend.id] ?? []
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 3) {
+                ForEach(pokes) { item in
+                    row(item)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.never)
+        .overlay {
+            if pokes.isEmpty {
+                Text("No pokes with \(friend.name) yet")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+            }
+        }
+    }
+
+    private func row(_ item: PokeService.Poke) -> some View {
+        let isMine = poke.isFromMe(item)
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            (Text(isMine ? "you: " : "\(friend.name): ")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(isMine ? .gray : pokeColor)
+             + message(item, isMine: isMine))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let date = item.createdAt {
+                Text(Self.time(date))
+                    .font(.system(size: 9))
+                    .foregroundColor(.gray.opacity(0.7))
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    /// A poke without a message reads "poked".
+    private func message(_ item: PokeService.Poke, isMine: Bool) -> Text {
+        if item.message.isEmpty {
+            return Text(isMine ? "poked" : "poked you").italic().font(.system(size: 11)).foregroundColor(.gray)
+        }
+        return Text(item.message).font(.system(size: 11)).foregroundColor(.white)
+    }
+
+    private static func time(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 }
 

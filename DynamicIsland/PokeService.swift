@@ -36,9 +36,10 @@ class PokeService: ObservableObject {
         let name: String
     }
 
-    nonisolated struct Poke: Decodable, Sendable {
+    nonisolated struct Poke: Identifiable, Decodable, Sendable {
         let id: Int
         let senderID: UUID
+        let recipientID: UUID?
         let senderName: String
         let message: String
         let createdAt: Date?
@@ -46,6 +47,7 @@ class PokeService: ObservableObject {
         enum CodingKeys: String, CodingKey {
             case id, message
             case senderID = "sender_id"
+            case recipientID = "recipient_id"
             case senderName = "sender_name"
             case createdAt = "created_at"
         }
@@ -54,6 +56,7 @@ class PokeService: ObservableObject {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(Int.self, forKey: .id)
             senderID = try container.decode(UUID.self, forKey: .senderID)
+            recipientID = try container.decodeIfPresent(UUID.self, forKey: .recipientID)
             senderName = try container.decode(String.self, forKey: .senderName)
             message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
             // Realtime and the REST API format times differently; a poke is shown either way.
@@ -81,6 +84,10 @@ class PokeService: ObservableObject {
     /// The friend being poked from the Poke tab, until Supabase answers.
     @Published private(set) var justPoked: UUID?
     private var justPokedSending: UUID?
+    /// The pokes between you and each friend whose chat was opened, newest first.
+    @Published private(set) var history: [UUID: [Poke]] = [:]
+    /// How many pokes a chat keeps; an older one makes way for a newer one.
+    static let historyLimit = 20
     /// Everyone with Dynamic Island open and connected to Poke right now; empty while this Mac
     /// isn't connected, since then it can't tell.
     @Published private(set) var onlineUserIDs: Set<UUID> = []
@@ -176,6 +183,7 @@ class PokeService: ObservableObject {
         try? FileManager.default.removeItem(at: Self.sessionDirectory)
         profile = nil
         friends = []
+        history = [:]
         actionError = nil
         state = .notConfigured
     }
@@ -303,6 +311,30 @@ class PokeService: ObservableObject {
         onlineUserIDs.contains(friend.id)
     }
 
+    /// Fetches the latest pokes you and a friend sent each other. Supabase keeps a week of pokes.
+    func loadHistory(with friendID: UUID) async {
+        guard state == .ready, let client, let userID = profile?.id else { return }
+        do {
+            let between = "and(sender_id.eq.\(userID),recipient_id.eq.\(friendID)),and(sender_id.eq.\(friendID),recipient_id.eq.\(userID))"
+            let pokes: [Poke] = try await client.from("pokes").select().or(between).order("id", ascending: false).limit(Self.historyLimit).execute().value
+            history[friendID] = pokes
+        } catch {
+            log.error("Loading the chat failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Puts a new poke at the top of an open chat, dropping the oldest past the limit.
+    private func addToHistory(_ poke: Poke, friendID: UUID) {
+        guard var pokes = history[friendID], !pokes.contains(where: { $0.id == poke.id }) else { return }
+        pokes.insert(poke, at: 0)
+        pokes.sort { $0.id > $1.id }
+        history[friendID] = Array(pokes.prefix(Self.historyLimit))
+    }
+
+    func isFromMe(_ poke: Poke) -> Bool {
+        poke.senderID == profile?.id
+    }
+
     // MARK: Poking
 
     /// Pokes a friend. From a banner's Poke Back the notch confirms it once sent; the Poke tab marks
@@ -324,8 +356,9 @@ class PokeService: ObservableObject {
                 }
             }
             do {
-                try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message), returning: .minimal).execute()
+                let sent: Poke = try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message), returning: .representation).select().single().execute().value
                 actionError = nil
+                addToHistory(sent, friendID: friendID)
                 if confirmOnNotch {
                     notificationManager.postActivity(AppNotification(type: .poke, title: "Poked \(name)", body: message))
                 }
@@ -476,6 +509,7 @@ class PokeService: ObservableObject {
         guard shownPokeIDs.insert(poke.id).inserted else { return }
         log.info("Poke \(poke.id) from \(source, privacy: .public)")
         lastPokeID = max(lastPokeID ?? 0, poke.id)
+        addToHistory(poke, friendID: poke.senderID)
         if !friends.contains(where: { $0.id == poke.senderID }) {
             refreshFriends()
         }
