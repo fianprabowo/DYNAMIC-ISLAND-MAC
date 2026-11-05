@@ -42,7 +42,20 @@ class VPNManager: ObservableObject {
 
     @Published private(set) var profiles: [Profile] = []
     /// Profiles being connected or disconnected from the notch.
-    @Published private(set) var busy: Set<String> = []
+    @Published private(set) var busy: Set<String> = [] {
+        didSet {
+            if busy.isEmpty && !oldValue.isEmpty {
+                lastBusyEnd = Date()
+            }
+        }
+    }
+    private var lastBusyEnd = Date.distantPast
+
+    /// Connecting or disconnecting now, or a moment ago: Pritunl can come to the front then, which
+    /// shouldn't close the notch under the pointer.
+    var mayTakeFocus: Bool {
+        !busy.isEmpty || Date().timeIntervalSince(lastBusyEnd) < 3
+    }
     /// Profiles being disconnected from the notch.
     @Published private(set) var disconnecting: Set<String> = []
     /// The profile waiting for its PIN to be typed in the VPN tab.

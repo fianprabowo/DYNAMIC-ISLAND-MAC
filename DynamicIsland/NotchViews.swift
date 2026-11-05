@@ -268,6 +268,7 @@ private struct NotchBannerView: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help("Write \(senderName) a message")
             }
 
@@ -282,6 +283,7 @@ private struct NotchBannerView: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help(notification.url?.absoluteString ?? "")
             }
 
@@ -323,6 +325,7 @@ private struct NotchBannerView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .help("Send to \(senderName)")
 
             if !isInPanel {
@@ -401,6 +404,7 @@ private struct BannerCloseButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .help("Close")
     }
 }
@@ -683,7 +687,8 @@ private struct NotchExpandedView: View {
         Button(action: { layout.selectedTab = tab }) {
             HStack(spacing: 4) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 10, weight: .semibold))
+                    // Beside the pin and the gear, a tab's icon on its own is as big as theirs.
+                    .font(.system(size: tab.isBesideSettings && layout.selectedTab != tab ? 13 : 10, weight: .semibold))
                 if layout.selectedTab == tab {
                     Text(tab.rawValue)
                         .font(.system(size: 11, weight: .semibold))
@@ -697,6 +702,7 @@ private struct NotchExpandedView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .help(tab.rawValue)
     }
 
@@ -831,6 +837,7 @@ private struct VPNProfileTile: View {
         .animation(.easeInOut(duration: 0.15), value: isDisconnecting)
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onTapGesture(perform: toggle)
+        .pointingHandCursor(!isAskingPIN && !isBusy)
         .onHover { isHovered = $0 }
         .help(help)
     }
@@ -840,7 +847,7 @@ private struct VPNProfileTile: View {
             let address = profile.clientAddress.isEmpty ? "" : " · \(profile.clientAddress)"
             return "\(profile.name)\(address)\nClick to disconnect"
         }
-        return isConnecting ? "\(profile.name)\nConnecting… click to stop" : "\(profile.name)\nClick to connect"
+        return isConnecting ? "\(profile.name)\nConnecting…" : "\(profile.name)\nClick to connect"
     }
 
     private func toggle() {
@@ -870,6 +877,109 @@ private struct VPNProfileTile: View {
     }
 }
 
+// MARK: - Pointing hand cursor
+extension View {
+    /// A pointing-hand cursor while the pointer is over the view, for buttons and other things to
+    /// click; `active` false keeps the arrow, for something that can't be clicked right now.
+    func pointingHandCursor(_ active: Bool = true) -> some View {
+        modifier(PointingHandCursor(isActive: active))
+    }
+}
+
+/// SwiftUI's own hover tells when the pointer is on the view: it knows what's clipped, scrolled away
+/// or covered, and it notices a view appearing under a pointer that stays still. A disabled control
+/// keeps the arrow.
+private struct PointingHandCursor: ViewModifier {
+    let isActive: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var id = UUID()
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onContinuousHover { phase in
+                if case .active = phase {
+                    isHovering = true
+                } else {
+                    isHovering = false
+                }
+                PointingHandCoordinator.set(id, hovering: isHovering && isEnabled && isActive)
+            }
+            .onChange(of: isEnabled && isActive) { _, clickable in
+                PointingHandCoordinator.set(id, hovering: isHovering && clickable)
+            }
+            .onDisappear {
+                PointingHandCoordinator.set(id, hovering: false)
+            }
+    }
+}
+
+/// Shows the hand while any marked view is hovered, and puts the arrow back once none is.
+///
+/// The notch's app is rarely the active one when the pointer is on it. macOS ignores cursor changes
+/// from an inactive app, so the window server's private "sets cursor in background" property is
+/// turned on (looked up at run time, skipped if it's gone); and since the system may still put the
+/// arrow back as the pointer moves, the hand is set again on every move while it's wanted.
+enum PointingHandCoordinator {
+    private static var hovered: Set<UUID> = []
+    private static var showsHand = false
+    private static var monitors: [Any] = []
+
+    static func set(_ id: UUID, hovering: Bool) {
+        if hovering {
+            hovered.insert(id)
+        } else {
+            hovered.remove(id)
+        }
+        startIfNeeded()
+        apply()
+    }
+
+    private static func apply() {
+        if !hovered.isEmpty {
+            NSCursor.pointingHand.set()
+            showsHand = true
+        } else if showsHand {
+            NSCursor.arrow.set()
+            showsHand = false
+        }
+    }
+
+    private static func startIfNeeded() {
+        guard monitors.isEmpty else { return }
+        allowCursorWhileInactive()
+        // Only does something while the hand is wanted; otherwise a move costs one check of a set.
+        let reassert: () -> Void = {
+            if !hovered.isEmpty {
+                NSCursor.pointingHand.set()
+            }
+        }
+        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .leftMouseUp]
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { _ in
+            MainActor.assumeIsolated(reassert)
+        }) {
+            monitors.append(monitor)
+        }
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: events, handler: { event in
+            MainActor.assumeIsolated(reassert)
+            return event
+        }) {
+            monitors.append(monitor)
+        }
+    }
+
+    private static func allowCursorWhileInactive() {
+        typealias DefaultConnection = @convention(c) () -> Int32
+        typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        let everywhere = UnsafeMutableRawPointer(bitPattern: -2)  // RTLD_DEFAULT
+        guard let defaultSymbol = dlsym(everywhere, "_CGSDefaultConnection"),
+              let setSymbol = dlsym(everywhere, "CGSSetConnectionProperty") else { return }
+        let connection = unsafeBitCast(defaultSymbol, to: DefaultConnection.self)()
+        let setProperty = unsafeBitCast(setSymbol, to: SetProperty.self)
+        _ = setProperty(connection, connection, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+    }
+}
+
 // MARK: - Alerts
 /// Every notification: the app's own and other apps'. Each can be removed, or all at once.
 private struct AlertsView: View {
@@ -887,6 +997,7 @@ private struct AlertsView: View {
                         withAnimation { notificationManager.clearAll() }
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.gray)
                 }
@@ -952,6 +1063,7 @@ private struct AlertRow: View {
                     .foregroundColor(.gray)
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .help("Remove")
         }
         .padding(.horizontal, 10)
@@ -959,6 +1071,7 @@ private struct AlertRow: View {
         .background(Color.white.opacity(isHovered ? 0.12 : 0.07))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .onHover { isHovered = $0 }
+        .pointingHandCursor()
         // Clicking a notification from another app opens that app.
         .onTapGesture {
             notification.open()
@@ -981,6 +1094,7 @@ private struct PinButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .help(layout.staysOpen ? "Unpin" : "Keep Open")
     }
 }
@@ -1012,6 +1126,7 @@ private struct SettingsMenu: View {
                 .font(.system(size: 12))
         }
         .menuStyle(.borderlessButton)
+        .pointingHandCursor()
         .menuIndicator(.hidden)
         .fixedSize()
         .tint(.gray)
@@ -1073,6 +1188,7 @@ private struct TimerView: View {
                         .frame(height: 38)
                     }
                     .buttonStyle(TimerCardStyle())
+                    .pointingHandCursor()
                 }
             }
         }
@@ -1144,6 +1260,7 @@ private struct TimerView: View {
                 .padding(8)
             }
             .buttonStyle(TimerCardStyle())
+            .pointingHandCursor()
 
             HStack(spacing: 6) {
                 Image(systemName: "moon.fill")
@@ -1184,6 +1301,7 @@ private struct TimerView: View {
             .frame(height: 30)
         }
         .buttonStyle(TimerCardStyle())
+        .pointingHandCursor()
     }
 
     private var soundLabel: String {
@@ -1205,6 +1323,7 @@ private struct TimerView: View {
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(TimerCardStyle(prominent: prominent, cornerRadius: 20))
+            .pointingHandCursor()
             Text(title)
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundColor(.gray)
@@ -1250,6 +1369,7 @@ private struct TimerView: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .disabled(name.isEmpty)
             .opacity(name.isEmpty ? 0.3 : 1)
 
@@ -1321,6 +1441,7 @@ private struct TimerView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
     }
 }
 
@@ -1383,6 +1504,7 @@ private struct MediaWidget: View {
                         .offset(x: 6, y: 6)
                 }
             }
+            .pointingHandCursor()
             .onTapGesture {
                 spotifyManager.revealSource()
             }
@@ -1451,6 +1573,7 @@ private struct MediaWidget: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(MediaButtonStyle())
+        .pointingHandCursor()
     }
 }
 
@@ -1617,6 +1740,7 @@ private struct SourceSwitcher: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help(app == .chrome ? "YouTube" : app.scriptName)
             }
         }
@@ -1742,6 +1866,7 @@ private struct YouTubeMediaView: View {
                     }
                 }
             }
+            .pointingHandCursor()
             .onTapGesture { spotifyManager.revealSource() }
         }
     }
@@ -1839,6 +1964,7 @@ private struct YouTubeMediaView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(MediaButtonStyle())
+        .pointingHandCursor()
         .help(help)
     }
 }
@@ -1957,6 +2083,7 @@ private struct SyncedLyricsView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(LyricLineStyle())
+                            .pointingHandCursor()
                             .help("Play from here")
                             .id(line.id)
                         }
@@ -2136,6 +2263,7 @@ private struct MeetControlCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .help("Show the meeting in Chrome")
 
             Text(meeting.code)
@@ -2158,6 +2286,7 @@ private struct MeetControlCard: View {
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .pointingHandCursor()
                     }
                 }
             } else {
@@ -2221,6 +2350,7 @@ private struct MeetLiveCard: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(MediaButtonStyle())
+            .pointingHandCursor()
             .help("Show the call bigger")
         }
         .padding(.leading, 8)
@@ -2245,6 +2375,7 @@ private struct MeetLiveCard: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(MediaButtonStyle())
+            .pointingHandCursor()
             .help("Show in Chrome")
         }
         .padding(.horizontal, 6)
@@ -2312,6 +2443,7 @@ private struct MeetCallView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(MediaButtonStyle())
+            .pointingHandCursor()
             .help("Back to the calendar and Claude usage")
         }
         .padding(.leading, 10)
@@ -2336,6 +2468,7 @@ private struct MeetCallView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(MediaButtonStyle())
+            .pointingHandCursor()
             .help("Show in Chrome")
         }
         .padding(.horizontal, 10)
@@ -2392,6 +2525,7 @@ private struct MeetLeaveButton: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .help("Leave the call")
     }
 }
@@ -2415,6 +2549,7 @@ private struct MeetToggle: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .help(isOn ? "Turn off the \(name)" : "Turn on the \(name)")
         }
     }
@@ -2501,6 +2636,7 @@ private struct CalendarWidget: View {
         .background(isSelected && !isToday ? Color.white.opacity(0.1) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
+        .pointingHandCursor()
         .onTapGesture {
             selectedDay = day
         }
@@ -2583,6 +2719,7 @@ private struct EventList: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
     }
 }
 
@@ -2665,6 +2802,7 @@ private struct MeetingCard: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 // Invitations come from anyone: show where the link goes before it's clicked.
                 .help(url.absoluteString)
             } else {
@@ -2677,6 +2815,7 @@ private struct MeetingCard: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
             }
         }
         .padding(10)
@@ -3041,6 +3180,7 @@ private struct PokeFriendsView: View {
                             .foregroundColor(.gray)
                         }
                         .buttonStyle(.plain)
+                        .pointingHandCursor()
                         .help("Your friend code: send it to a friend to add you")
                     }
                 }
@@ -3106,6 +3246,7 @@ private struct PokeFriendsView: View {
                         .contentShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
+                    .pointingHandCursor()
                     .disabled(selectedFriend == nil)
                     .opacity(selectedFriend == nil ? 0.4 : 1)
                     .help(selectedFriend.map { "Poke \($0.name)" } ?? "")
@@ -3171,6 +3312,7 @@ private struct FriendRow: View {
                         .foregroundColor(.gray)
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help("Remove \(friend.name)")
             }
         }
@@ -3181,6 +3323,7 @@ private struct FriendRow: View {
                 .fill(isSelected ? pokeColor.opacity(0.35) : Color.white.opacity(isHovered ? 0.1 : 0))
         )
         .contentShape(Rectangle())
+        .pointingHandCursor()
         .onTapGesture(perform: action)
         .onHover { isHovered = $0 }
         .help("Poke \(friend.name)")
@@ -3220,6 +3363,7 @@ private struct PokePill: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
     }
 }
 

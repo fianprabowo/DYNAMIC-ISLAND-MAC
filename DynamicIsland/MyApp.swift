@@ -285,6 +285,7 @@ struct TabButton: View {
                 .cornerRadius(6)
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
     }
 }
 
@@ -517,6 +518,7 @@ struct ThemeTabView: View {
                                 .foregroundColor(.primary)
                         }
                         .buttonStyle(.plain)
+                        .pointingHandCursor()
 
                         if themeManager.currentTheme.backgroundColor == preset.theme.backgroundColor {
                             Image(systemName: "checkmark.circle.fill")

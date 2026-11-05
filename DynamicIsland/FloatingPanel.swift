@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import OSLog
 import SwiftUI
 
 /// Tabs of the expanded notch panel, modeled after NotchNook.
@@ -286,6 +287,7 @@ class FloatingPanel: NSPanel {
     private var hoverCloseWorkItem: DispatchWorkItem?
     private var mouseMonitors: [Any] = []
     private var isMouseInside = false
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "Panel")
 
     private static let floatingPositionKey = "islandFloatingTopLeft"
 
@@ -363,9 +365,24 @@ class FloatingPanel: NSPanel {
     override func resignKey() {
         super.resignKey()
         // Clicking anywhere else closes the notch island, like the real Dynamic Island.
-        if layout.isPinnedToNotch && !layout.staysOpen {
-            layout.collapse()
+        guard layout.isPinnedToNotch && !layout.staysOpen && layout.isExpanded else { return }
+        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+        let location = NSEvent.mouseLocation
+        // Pritunl coming to the front while a VPN connects or disconnects from the notch isn't a click
+        // elsewhere: with the pointer still on the panel, it stays, and closes once the pointer
+        // leaves. Other apps coming forward, like one a notification or the artwork opens, close it.
+        if layout.openOnHover && VPNManager.shared.mayTakeFocus && containsPointer(location) {
+            log.info("Lost the focus to \(app, privacy: .public) with the pointer on the panel at \(Int(location.x)), \(Int(location.y)); staying open")
+            return
         }
+        log.info("Lost the focus to \(app, privacy: .public), pointer at \(Int(location.x)), \(Int(location.y)) (panel \(Int(self.frame.minX))...\(Int(self.frame.maxX)), \(Int(self.frame.minY))...\(Int(self.frame.maxY))); closing")
+        layout.collapse()
+    }
+
+    /// Whether the point is on the panel, its edges included: the pointer pushed against the top of
+    /// the screen sits on the panel's top edge, which `NSRect.contains` leaves out.
+    private func containsPointer(_ point: NSPoint) -> Bool {
+        point.x >= frame.minX && point.x <= frame.maxX && point.y >= frame.minY && point.y <= frame.maxY
     }
 
     // MARK: Hover
@@ -373,7 +390,7 @@ class FloatingPanel: NSPanel {
     private func pointerMoved() {
         guard layout.isPinnedToNotch, layout.openOnHover, isVisible else { return }
         let location = NSEvent.mouseLocation
-        let inside = layout.isExpanded ? frame.contains(location) : notchHoverRect.contains(location)
+        let inside = layout.isExpanded ? containsPointer(location) : notchHoverRect.contains(location)
         guard inside != isMouseInside else { return }
         isMouseInside = inside
         if inside {
@@ -411,12 +428,14 @@ class FloatingPanel: NSPanel {
                 self.scheduleHoverClose()
                 return
             }
-            guard !self.frame.contains(NSEvent.mouseLocation) else { return }
+            let location = NSEvent.mouseLocation
+            guard !self.containsPointer(location) else { return }
             // Text being typed, like a reply to a poke, isn't lost when the pointer wanders off;
             // a click elsewhere still closes it.
             if self.isKeyWindow, let editor = self.firstResponder as? NSTextView, !editor.string.isEmpty {
                 return
             }
+            self.log.info("Pointer left the panel at \(Int(location.x)), \(Int(location.y)) (panel \(Int(self.frame.minX))...\(Int(self.frame.maxX)), \(Int(self.frame.minY))...\(Int(self.frame.maxY))); closing")
             self.layout.collapse()
         }
         hoverCloseWorkItem = work
