@@ -81,6 +81,18 @@ class PokeService: ObservableObject {
     /// The friend being poked from the Poke tab, until Supabase answers.
     @Published private(set) var justPoked: UUID?
     private var justPokedSending: UUID?
+    /// Everyone with Dynamic Island open and connected to Poke right now; empty while this Mac
+    /// isn't connected, since then it can't tell.
+    @Published private(set) var onlineUserIDs: Set<UUID> = []
+    /// Each connected app, by its presence key, and whose it is. One person can have several Macs.
+    private var presences: [String: UUID] = [:] {
+        didSet {
+            let online = Set(presences.values)
+            if online != onlineUserIDs {
+                onlineUserIDs = online
+            }
+        }
+    }
 
     private(set) var projectURL: String {
         get { UserDefaults.standard.string(forKey: Self.urlKey) ?? "" }
@@ -107,6 +119,7 @@ class PokeService: ObservableObject {
     private let notificationManager = NotificationManager.shared
     private var client: SupabaseClient?
     private var channel: RealtimeChannelV2?
+    private var presenceChannel: RealtimeChannelV2?
     private var listenTasks: [Task<Void, Never>] = []
     private var retryTask: Task<Void, Never>?
     /// Pokes shown since launch; Realtime and catching up can both bring the same one.
@@ -288,6 +301,10 @@ class PokeService: ObservableObject {
         friends = try await client.rpc("list_friends").execute().value
     }
 
+    func isOnline(_ friend: Friend) -> Bool {
+        onlineUserIDs.contains(friend.id)
+    }
+
     // MARK: Poking
 
     /// Pokes a friend. From a banner's Poke Back the notch confirms it once sent; the Poke tab marks
@@ -373,15 +390,62 @@ class PokeService: ObservableObject {
                 await self?.fetchMissed()
             }
         })
+        showOnline(client: client, userID: userID)
+    }
+
+    /// Every connected app joins one shared Realtime channel and says whose it is (only the user
+    /// ID, which only friends can put a name to). An app that quits, sleeps or loses the network
+    /// leaves it, so a friend in it is online.
+    private func showOnline(client: SupabaseClient, userID: UUID) {
+        let channel = client.channel("poke-online")
+        let changes = channel.presenceChange()
+        presenceChannel = channel
+
+        listenTasks.append(Task { [weak self] in
+            for await status in channel.statusChange {
+                if status == .subscribed {
+                    // Joining again, after a reconnect, needs saying so again.
+                    await channel.track(state: ["user_id": .string(userID.uuidString.lowercased())])
+                } else {
+                    // Not connected, so who's online isn't known; joining again brings everyone back.
+                    self?.presences = [:]
+                }
+            }
+        })
+        listenTasks.append(Task { [weak self] in
+            for await change in changes {
+                // An app that says so again leaves and joins in one change; it stays online.
+                for key in change.leaves.keys {
+                    self?.presences[key] = nil
+                }
+                for (key, presence) in change.joins {
+                    if let id = presence.state["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
+                        self?.presences[key] = id
+                    }
+                }
+                self?.log.info("Online: \(self?.onlineUserIDs.count ?? 0) people")
+            }
+        })
+        listenTasks.append(Task { [weak self] in
+            do {
+                try await channel.subscribeWithError()
+            } catch {
+                self?.log.error("Online channel subscribe failed: \(String(describing: error), privacy: .public)")
+            }
+        })
     }
 
     private func stopListening() {
         listenTasks.forEach { $0.cancel() }
         listenTasks = []
-        if let channel, let client {
-            Task { await client.removeChannel(channel) }
+        if let client {
+            for channel in [channel, presenceChannel].compactMap({ $0 }) {
+                Task { await client.removeChannel(channel) }
+            }
         }
         channel = nil
+        presenceChannel = nil
+        presences = [:]
         isListening = false
     }
 

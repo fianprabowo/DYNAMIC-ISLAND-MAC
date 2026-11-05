@@ -3134,7 +3134,8 @@ private struct PokeFriendsView: View {
     }
 }
 
-/// A friend's name; clicking picks them to poke. Hovering shows a button to remove them.
+/// A friend's name, with a green dot while they're online; clicking picks them to poke. Hovering
+/// shows a button to remove them.
 private struct FriendRow: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
@@ -3144,7 +3145,13 @@ private struct FriendRow: View {
     @State private var isHovered = false
 
     var body: some View {
+        let isOnline = poke.isOnline(friend)
         HStack(spacing: 6) {
+            Circle()
+                .fill(isOnline ? Color.green : Color.white.opacity(0.25))
+                .frame(width: 6, height: 6)
+                .animation(.easeInOut(duration: 0.2), value: isOnline)
+                .help(isOnline ? "\(friend.name) is online" : "\(friend.name) is offline")
             Text(friend.name)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
