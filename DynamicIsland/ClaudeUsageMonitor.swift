@@ -1,29 +1,148 @@
 import Foundation
 import Combine
+import OSLog
 
 /// Claude Code token usage read from its local transcripts (~/.claude/projects/**/*.jsonl),
 /// plus whether a Claude Code session is working right now (for the notch live activity).
 ///
-/// Plan limits come from the Claude Code status line: ~/.claude/dynamic-island-statusline.sh saves
-/// the status JSON, whose `rate_limits` hold the 5-hour and weekly usage of a Pro or Max plan.
+/// The 5-hour and weekly limits of a Pro or Max plan come from Anthropic, read with Claude Code's
+/// own sign-in (see `ClaudePlanUsage`). When that can't be read, they come from the Claude Code
+/// status line: ~/.claude/dynamic-island-statusline.sh saves the status JSON, whose `rate_limits`
+/// hold the same windows, but only while Claude Code runs in a terminal.
 class ClaudeUsageMonitor: ObservableObject {
     @Published private(set) var snapshot = ClaudeUsageSnapshot()
 
     private let scanner = ClaudeLogScanner()
     private var scanTask: Task<Void, Never>?
+    private var limitsTask: Task<Void, Never>?
+    /// The latest scan of the transcripts, before the live limits are put in.
+    private var scanned = ClaudeUsageSnapshot()
+    private var liveLimits: ClaudePlanUsage.Limits?
+
+    /// How often the limits are read from Anthropic, and again after a failed read.
+    private static let limitsInterval: TimeInterval = 120
+    private static let limitsRetryInterval: TimeInterval = 300
+    /// Live limits older than this give way to the status line's, or to none.
+    private static let liveLimitsMaxAge: TimeInterval = 600
 
     init() {
         scanTask = Task { [weak self, scanner] in
             while !Task.isCancelled {
                 let snapshot = await scanner.scan()
-                self?.snapshot = snapshot
+                self?.scanned = snapshot
+                self?.publish()
                 try? await Task.sleep(for: .seconds(3))
+            }
+        }
+        limitsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let limits = await ClaudePlanUsage.fetch()
+                if let limits {
+                    self?.liveLimits = limits
+                    self?.publish()
+                }
+                try? await Task.sleep(for: .seconds(limits == nil ? Self.limitsRetryInterval : Self.limitsInterval))
             }
         }
     }
 
     deinit {
         scanTask?.cancel()
+        limitsTask?.cancel()
+    }
+
+    private func publish() {
+        var snapshot = scanned
+        let now = Date()
+        if let live = liveLimits, now.timeIntervalSince(live.readAt) < Self.liveLimitsMaxAge {
+            snapshot.fiveHourLimit = live.fiveHour.current(at: now)
+            snapshot.weeklyLimit = live.weekly.current(at: now)
+        }
+        self.snapshot = snapshot
+    }
+}
+
+/// The plan's 5-hour and weekly limits from Anthropic's usage endpoint, the one Claude Code's
+/// /usage reads, so they're right however Claude Code is used (terminal, desktop app, IDE).
+///
+/// It signs in with Claude Code's own token from the login keychain, read through `security` the
+/// way Claude Code reads it, and sends it to api.anthropic.com only. The token is never logged or
+/// kept, and never refreshed here: Claude Code refreshes it, and an expired one is skipped.
+/// The endpoint isn't documented, so any answer it doesn't understand counts as no limits.
+nonisolated enum ClaudePlanUsage {
+    struct Limits: Sendable {
+        let fiveHour: ClaudeRateLimit
+        let weekly: ClaudeRateLimit
+        let readAt: Date
+    }
+
+    private static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    private static let keychainService = "Claude Code-credentials"
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "ClaudeUsage")
+
+    static func fetch() async -> Limits? {
+        guard let token = await accessToken() else { return nil }
+        var request = URLRequest(url: endpoint, timeoutInterval: 15)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("DynamicIsland", forHTTPHeaderField: "User-Agent")
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode else {
+            log.info("Usage: no answer")
+            return nil
+        }
+        guard status == 200 else {
+            log.info("Usage: HTTP \(status, privacy: .public)")
+            return nil
+        }
+        guard let limits = parse(data, readAt: Date()) else {
+            log.info("Usage: answer not understood")
+            return nil
+        }
+        log.info("Usage: 5-hour \(limits.fiveHour.usedPercentage, privacy: .public)%, week \(limits.weekly.usedPercentage, privacy: .public)%")
+        return limits
+    }
+
+    /// `{"five_hour": {"utilization": 24.0, "resets_at": "2026-11-06T05:00:00.123+00:00"}, "seven_day": {…}}`,
+    /// utilization in percent. A window that's null or left out has nothing used yet.
+    static func parse(_ data: Data, readAt: Date) -> Limits? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object.keys.contains("five_hour") || object.keys.contains("seven_day") else { return nil }
+
+        func window(_ key: String) -> ClaudeRateLimit {
+            guard let window = object[key] as? [String: Any],
+                  let used = (window["utilization"] as? NSNumber)?.doubleValue else {
+                return ClaudeRateLimit(usedPercentage: 0, resetsAt: nil)
+            }
+            return ClaudeRateLimit(usedPercentage: min(max(used, 0), 100), resetsAt: date(window["resets_at"]))
+        }
+        return Limits(fiveHour: window("five_hour"), weekly: window("seven_day"), readAt: readAt)
+    }
+
+    /// An ISO 8601 time, whose fraction of a second (up to microseconds) is dropped first.
+    private static func date(_ value: Any?) -> Date? {
+        guard let string = value as? String else { return nil }
+        return ISO8601DateFormatter().date(from: string.replacing(/\.\d+/, with: ""))
+    }
+
+    /// Claude Code's sign-in token, unless it has expired.
+    private static func accessToken() async -> String? {
+        guard let data = await CommandRunner.run("/usr/bin/security", ["find-generic-password", "-s", keychainService, "-w"], timeout: 60),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = object["claudeAiOauth"] as? [String: Any],
+              let token = oauth["accessToken"] as? String, !token.isEmpty else {
+            log.info("Usage: no Claude Code sign-in in the keychain")
+            return nil
+        }
+        // Milliseconds since 1970.
+        if let expiresAt = (oauth["expiresAt"] as? NSNumber)?.doubleValue,
+           Date(timeIntervalSince1970: expiresAt / 1000) <= Date() {
+            log.info("Usage: Claude Code's sign-in has expired; it renews when Claude Code runs")
+            return nil
+        }
+        return token
     }
 }
 
@@ -44,6 +163,14 @@ nonisolated struct ClaudeRateLimit: Sendable {
 
     var remainingFraction: Double {
         max(0, min(1, 1 - usedPercentage / 100))
+    }
+
+    /// Once the window has reset, none of it is used until the next read says otherwise.
+    func current(at now: Date) -> ClaudeRateLimit {
+        if let resetsAt, resetsAt <= now {
+            return ClaudeRateLimit(usedPercentage: 0, resetsAt: nil)
+        }
+        return self
     }
 }
 
@@ -76,6 +203,8 @@ actor ClaudeLogScanner {
 
     /// A session counts as working if its transcript changed recently and doesn't end with a final reply.
     private static let workingWindow: TimeInterval = 180
+    /// How long after a reply the status line may save its JSON before the limits count as out of date.
+    private static let statusSlack: TimeInterval = 300
 
     func scan() -> ClaudeUsageSnapshot {
         let now = Date()
@@ -95,12 +224,19 @@ actor ClaudeLogScanner {
         return snapshot
     }
 
-    /// Nil when the plan has no limits in the status JSON (only Pro and Max plans have them).
-    /// The script keeps the last known windows, so they stay visible between prompts.
+    /// Nil when the plan has no limits in the status JSON (only Pro and Max plans have them), or
+    /// when the JSON is out of date. The script keeps the last known windows, so they stay visible
+    /// between prompts.
     private func rateLimits(now: Date) -> (fiveHour: ClaudeRateLimit?, weekly: ClaudeRateLimit?) {
         guard let data = try? Data(contentsOf: statusURL),
+              let saved = try? statusURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let limits = object["rate_limits"] as? [String: Any] else { return (nil, nil) }
+        // Only Claude Code in a terminal runs the status line; replies in the desktop app leave the
+        // JSON behind, and its old numbers would show more of the limits left than there is.
+        if let latestReply = replies.values.map(\.date).max(), latestReply > saved.addingTimeInterval(Self.statusSlack) {
+            return (nil, nil)
+        }
 
         func limit(_ key: String) -> ClaudeRateLimit {
             // A window Claude Code leaves out isn't in use yet.

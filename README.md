@@ -72,7 +72,9 @@ The Media tab reads and controls YouTube in Chrome, and the Nook does the same f
 
 ## Claude plan usage
 
-The 5-hour and weekly limits come from the Claude Code status line. To set it up:
+The 5-hour and weekly limits are read from Anthropic every 2 minutes, from the same usage endpoint Claude Code's `/usage` reads, so they're right however you use Claude Code (terminal, desktop app, IDE). The app signs in with Claude Code's own token, read from the login keychain (`Claude Code-credentials`) through `security`, as Claude Code reads it; the token goes to api.anthropic.com only and is never logged, kept or refreshed by the app. If Claude Code's sign-in has expired, the read waits until Claude Code renews it. The endpoint isn't documented, so it may change; the app then falls back to the status line.
+
+The status line is the fallback, and it only works while Claude Code runs in a terminal. To set it up:
 
 1. Copy the script:
 
@@ -87,7 +89,7 @@ The 5-hour and weekly limits come from the Claude Code status line. To set it up
    "statusLine": { "type": "command", "command": "~/.claude/dynamic-island-statusline.sh" }
    ```
 
-On each refresh the script saves the status JSON to `~/Library/Application Support/DynamicIsland/claude-status.json`, where the app reads it. It also prints the model and usage bars as the Claude Code status line. Token counts for today are read from Claude Code's local transcripts in `~/.claude/projects`.
+On each refresh the script saves the status JSON to `~/Library/Application Support/DynamicIsland/claude-status.json`, where the app reads it. It also prints the model and usage bars as the Claude Code status line. Token counts for today are read from Claude Code's local transcripts in `~/.claude/projects`. Without a fresh read from Anthropic, limits the status line saved before your latest Claude reply are out of date; the notch then hides them and shows today's tokens instead.
 
 ## Claude Code alerts
 
