@@ -35,6 +35,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let timerManager = TimerManager(notificationManager: .shared)
     let pokeService = PokeService.shared
     let vpnManager = VPNManager.shared
+    let todoService = TodoService.shared
+    let jiraService = JiraService.shared
     let meetController = MeetController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -87,6 +89,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(timerManager)
                     .environmentObject(pokeService)
                     .environmentObject(vpnManager)
+                    .environmentObject(todoService)
+                    .environmentObject(jiraService)
                     .environmentObject(meetController)
             )
         )
@@ -564,5 +568,7 @@ struct SettingsView: View {
         .environmentObject(TimerManager(notificationManager: .shared))
         .environmentObject(PokeService.shared)
         .environmentObject(VPNManager.shared)
+        .environmentObject(TodoService.shared)
+        .environmentObject(JiraService.shared)
         .environmentObject(MeetController())
 }

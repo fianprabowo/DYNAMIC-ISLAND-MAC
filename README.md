@@ -21,7 +21,7 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
 - **Animations**, each turned on or off under *Animations* in the settings menu: a little face beside the notch while nothing is running (in place of the bell; unread notifications keep their number on the right). It breathes, blinks (sometimes twice, or a wink), glances around, and every so often yawns, looks around, hums or hops; it grins as the pointer comes near, glances at the badge when a notification comes in, looks surprised after a friend's poke, gets drowsy after a minute without input and falls asleep after two, and looks a little tired late at night. Its mouth only shows with an expression; a friend's poke shakes the notch and swings its hand in, with a little weather over the banner by the time of day (sunbeams in the morning, snow during the day, twinkling stars at night); and a bouncier, jelly-like opening, with a little squish when a notification comes in.
 - **Volume and brightness on the notch.** While the volume or the built-in display's brightness changes, wider wings beside the notch show the level (not over a notification banner). macOS's own indicator still shows too. Turn it off with *Show Volume & Brightness* in the settings menu.
 - **Notifications on the notch.** When another app posts a notification, the notch drops down for three seconds with the app's icon, title and message. If the app's Dock badge goes up first, the notch drops down right away with "New notification", then again with the details about five seconds later. Click it to open the app. Notifications that arrive together show one after another; three or more from one app show as one banner ("Slack · 3 new notifications"). While a Focus such as Do Not Disturb is on, the notch stays quiet and notifications only go to the Alerts tab.
-- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has six tabs:
+- **Expanded notch.** Hover over or click the notch to open it. Pin it (next to the settings icon) to keep it open. It has seven tabs:
   - **Nook:** a calendar week strip with the day's events, a meeting card, and Claude usage (plan limits left plus tokens today). The card shows the meeting going on or coming next (or the event you click in the list): when it starts or how long is left, the time, calendar or place, and a **Join** button when the event has a video call link, otherwise *Open in Calendar*.
     - **Google Meet on the notch.** *Join* opens a Meet link in Chrome. Before you join, the card sets up the microphone and camera and has *Join now*. In the call, the card shows the call live (the shared screen and the cameras, recorded from the Chrome window without its toolbar) between the calendar and Claude usage, with the meeting's name, how long it has run, the microphone and camera (red while off) and *Leave*. Its expand button shows the call bigger, in a taller panel, until you go back to the Nook; there a click on the picture shows the tab. The collapsed notch shows a green camera (a red crossed-out microphone while muted) and the call's length. The live picture needs the Screen Recording permission, the Meet tab showing in its Chrome window, and the window not minimized; the controls need Chrome's *Allow JavaScript from Apple Events* in the Chrome profile the meeting is in (see [YouTube in Chrome](#youtube-in-chrome)).
   - **Media:** what's playing in Spotify, Music or YouTube in Chrome. The player you last played stays on screen while paused; when more than one has something loaded, icons in the corner switch between them. The buttons, the progress bar (drag or click it) and a click on a lyric line all act on the player shown.
@@ -30,6 +30,7 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
   - **Alerts:** every notification, from the app and from other apps. Remove them one by one or clear them all. The latest 50 are kept, also across restarts, in `~/Library/Application Support/<bundle id>/notifications.json` (message text included).
   - **Poke:** friends who also run Dynamic Island. Pick a friend from the list (a green dot means they're online) and press Enter in the message field (or click *Poke*), with or without a short message: their notch drops down with "Alfian poked you", and a ping sounds. *Poke Back* pokes right back; *Reply* turns the banner into a message field right there: type and press Enter to send, or Escape to cancel. A click elsewhere on the banner opens the Poke tab on the chat with that friend. Under the message field, the last 20 pokes with the picked friend, newest on top ("jho: …", "you: …"). Needs a shared Supabase project (see [Poke](#poke)).
   - **Timer:** a countdown with presets (1 minute to 1 hour), pause, +1 minute and stop, and Pomodoro: 25 minutes of focus, then a 5-minute break that starts on its own. A sound plays when it ends. With *Turn On Focus*, Pomodoro turns a Focus on for the focus part (see [Focus during Pomodoro](#focus-during-pomodoro)).
+  - **Todo** (right of the notch, beside the VPN tab): your own todo list on the left, and the Jira issues assigned to you in your open sprints on the right. Type and press Enter to add a todo, click its circle to tick it off, hover over it to delete it, and *Clear Done* removes the ticked-off ones. Todos are kept in the Supabase project Poke uses, so Poke has to be set up first, and the project needs [`supabase/todo.sql`](supabase/todo.sql). The Jira side shows the sprint's name and days left, then your issues: in progress first, then to do, then done; click one to open it in Jira (see [Todo](#todo)).
   - **VPN** (right of the notch, next to the pin): the profiles in the [Pritunl](https://pritunl.com) client as square tiles. Click a tile to connect, and again to disconnect: a connected one has a green border and shows how long it's been up (hover for the address it got), one connecting an orange border, and one disconnecting turns red. A profile that needs a PIN takes it from `PRITUNL_PIN` in your zsh config (e.g. `PRITUNL_PIN=123456` in `~/.zshrc`; it needn't be exported, which keeps it out of the environment of programs started from a terminal), and uses it for every profile, since a Pritunl PIN belongs to the user. Otherwise it asks for the PIN on each connect and doesn't keep it. The app never stores the PIN itself, not in the keychain and not on disk; keep `~/.zshrc` readable by you only (`chmod 600 ~/.zshrc`). While a VPN is connected a green lock shows beside the notch, and the notch drops down when a VPN connects or drops, also one started in the Pritunl app. Needs the Pritunl client in `/Applications`; the notch uses its command-line tool, so Pritunl's own service does the connecting. The PIN is typed in at the tool's password prompt, never passed as a command-line argument, where other processes could read it.
 
 - **Floating mode.** Turn off *Pin to Notch* in the menu bar icon's menu to let the island float freely.
@@ -119,7 +120,7 @@ Pokes travel through a [Supabase](https://supabase.com) project that you and you
 
 1. Create a project on supabase.com.
 2. In *Authentication → Sign In / Providers*, turn on **Allow anonymous sign-ins**. Each Mac signs in anonymously; there are no accounts or passwords.
-3. In the *SQL Editor*, run [`supabase/poke.sql`](supabase/poke.sql). It creates the tables and the rules that keep everyone to their own data.
+3. In the *SQL Editor*, run [`supabase/poke.sql`](supabase/poke.sql). It creates the tables and the rules that keep everyone to their own data. For the Todo tab, also run [`supabase/todo.sql`](supabase/todo.sql).
 4. In *Project Settings → API Keys*, copy the project URL and the anon (or publishable) key.
 
 Then everyone, on their own Mac: open the notch's **Poke** tab, paste the URL and key, click *Connect* and enter a name. Each person gets a friend code like `K7QX-M2PA`; entering a friend's code makes you friends both ways. Share the URL and key privately with friends (not in this repo): the key is meant to ship in apps, but it lets anyone who has it sign up to your project.
@@ -130,6 +131,29 @@ Then everyone, on their own Mac: open the notch's **Poke** tab, paste the URL an
 - At most 10 pokes a minute per person, and messages up to 100 characters.
 - Supabase pauses free projects after about a week without use. If the Poke tab says it can't reach Supabase, restore the project in the dashboard.
 - *Change Project* forgets the project and this Mac's sign-in. Setting up again makes a new friend code, so friends have to add you again.
+
+## Todo
+
+The Todo tab keeps each person's todos in the same Supabase project as Poke, under the same anonymous sign-in. Whoever set up the project runs [`supabase/todo.sql`](supabase/todo.sql) once in its *SQL Editor*; until then the tab says so.
+
+- Row level security lets each person read and change only their own todos; friends can't see them.
+- A todo is up to 200 characters, and each person can have up to 200 todos. The database records when each was added and ticked off.
+- The list belongs to this Mac's sign-in: *Change Project* in the Poke tab, or losing `~/Library/Application Support/<bundle id>/Poke/`, starts a new, empty list.
+
+### Jira sprint
+
+The Jira side reads Jira Cloud's REST API with your own API token, and only reads: the issues assigned to you in your open sprints (`assignee = currentUser() AND sprint in openSprints()`). To set it up:
+
+1. Create an API token at [id.atlassian.com → Security → API tokens](https://id.atlassian.com/manage-profile/security/api-tokens) with *Create API token* (not the one with scopes).
+2. Add your site, email and token to your zsh config, without `export`. This asks for the token without showing it or keeping it in the shell history:
+
+   ```sh
+   read -s "token?Jira API token: " && print -rl -- "" "JIRA_SITE=yoursite.atlassian.net" "JIRA_EMAIL=you@company.com" "JIRA_API_TOKEN='$token'" >> ~/.zshrc && unset token && chmod 600 ~/.zshrc
+   ```
+
+3. Click the refresh arrow on the Jira side.
+
+The app reads the three values from a login zsh when the tab opens, keeps the token in memory only, sends it to that `atlassian.net` site only (redirects aren't followed) and never logs it. The list is read again when you open the tab after a minute or more, or click refresh. If your organization turns off API tokens, Jira turns the token down and the tab says so.
 
 ## Focus during Pomodoro
 

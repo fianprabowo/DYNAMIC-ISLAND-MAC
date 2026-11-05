@@ -126,7 +126,8 @@ class PokeService: ObservableObject {
     private let pollInterval: TimeInterval = 20
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "Poke")
     private let notificationManager = NotificationManager.shared
-    private var client: SupabaseClient?
+    /// The Supabase project and this Mac's sign-in; the Todo tab keeps its todos there too.
+    private(set) var client: SupabaseClient?
     private var channel: RealtimeChannelV2?
     private var presenceChannel: RealtimeChannelV2?
     private var listenTasks: [Task<Void, Never>] = []

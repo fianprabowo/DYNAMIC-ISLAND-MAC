@@ -675,6 +675,8 @@ private struct NotchExpandedView: View {
                     PokeView()
                 case .vpn:
                     VPNView()
+                case .todo:
+                    TodoView()
                 case .timer:
                     TimerView()
                 }
@@ -763,6 +765,389 @@ private struct NotchExpandedView: View {
         .help(tab.rawValue)
     }
 
+}
+
+// MARK: - Todo
+/// Your own todos on the left, and on the right the Jira issues assigned to you in your open sprints.
+private struct TodoView: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            MyTodosColumn()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1)
+            JiraSprintColumn()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+}
+
+/// Your own todo list, kept in the Supabase project Poke uses (see supabase/todo.sql). Type and
+/// press Enter to add; click the circle to tick one off; hover to delete it.
+private struct MyTodosColumn: View {
+    @EnvironmentObject var todo: TodoService
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var themeManager: ThemeManager
+    @State private var newTitle = ""
+    @FocusState private var isFieldFocused: Bool
+
+    private var accent: Color { Color(themeManager.currentTheme.accentColor) }
+    private var canAdd: Bool {
+        !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !todo.isAdding
+    }
+
+    var body: some View {
+        Group {
+            switch todo.state {
+            case .needsProject:
+                placeholder("checklist", "Todos are kept in the Supabase project Poke uses. Set it up in the Poke tab first.",
+                            button: "Open Poke") { layout.selectedTab = .poke }
+            case .needsTable:
+                placeholder("tablecells", "Run supabase/todo.sql in the Supabase project's SQL Editor, then try again.",
+                            button: "Try Again", action: todo.refresh)
+            case .failed(let message):
+                placeholder("exclamationmark.triangle", message, button: "Try Again", action: todo.refresh)
+            case .loading:
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .ready:
+                list
+            }
+        }
+        .onAppear { todo.refresh() }
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(header)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                Spacer()
+                if todo.hasDone {
+                    Button("Clear Done") {
+                        withAnimation { todo.clearDone() }
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField("Add a todo", text: $newTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .focused($isFieldFocused)
+                    .onSubmit(add)
+                    .onChange(of: newTitle) { _, title in
+                        if title.count > TodoService.maxTitleLength {
+                            newTitle = String(title.prefix(TodoService.maxTitleLength))
+                        }
+                    }
+                if todo.isAdding {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Button(action: add) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 15))
+                            .foregroundColor(canAdd ? accent : .gray)
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .disabled(!canAdd)
+                    .help("Add")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color.white.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            if todo.todos.isEmpty {
+                Text("Nothing to do")
+                    .font(.system(size: 11))
+                    .foregroundColor(.gray.opacity(0.7))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(todo.todos) { item in
+                            TodoRow(item: item, accent: accent)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+
+            if let error = todo.actionError {
+                Text(error)
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private var header: String {
+        if todo.todos.isEmpty { return "My todos" }
+        let remaining = todo.remainingCount
+        return remaining == 0 ? "My todos · all done" : "My todos · \(remaining) to do"
+    }
+
+    private func add() {
+        guard canAdd else { return }
+        todo.add(newTitle)
+        newTitle = ""
+        isFieldFocused = true
+    }
+
+    private func placeholder(_ symbol: String, _ text: String, button: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 22))
+                .foregroundColor(.gray.opacity(0.6))
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 340)
+            Button(button, action: action)
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct TodoRow: View {
+    @EnvironmentObject var todo: TodoService
+    let item: TodoService.Todo
+    let accent: Color
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { todo.toggle(item) }
+            } label: {
+                Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 14))
+                    .foregroundColor(item.isDone ? accent : .gray)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(item.isDone ? "Mark as not done" : "Mark as done")
+
+            Text(item.title)
+                .font(.system(size: 12))
+                .strikethrough(item.isDone, color: .gray)
+                .foregroundColor(item.isDone ? .gray : .white)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                withAnimation { todo.delete(item) }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Delete")
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(isHovered ? 0.1 : 0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onHover { isHovered = $0 }
+    }
+}
+
+/// The Jira issues assigned to you in your open sprints: the ones in progress first, then the ones
+/// to do, then the done ones, dimmed. Clicking one opens it in the browser.
+private struct JiraSprintColumn: View {
+    @EnvironmentObject var jira: JiraService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            header
+
+            switch jira.state {
+            case .needsSetup:
+                note("Add \(JiraService.siteVariable), \(JiraService.emailVariable) and \(JiraService.tokenVariable) to your zsh config to see your sprint here.")
+            case .failed(let message):
+                note(message)
+            case .loading:
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .ready:
+                if jira.issues.isEmpty {
+                    Text("Nothing assigned to you in an open sprint")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(jira.issues) { JiraIssueRow(issue: $0) }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                }
+            }
+        }
+        .onAppear { jira.refreshIfStale() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text(jira.sprint?.name ?? "Jira sprint")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.gray)
+                .lineLimit(1)
+            if let left = daysLeft {
+                Text(left)
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray.opacity(0.7))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if jira.state == .ready && !jira.issues.isEmpty {
+                Text("\(jira.openCount) open · \(jira.doneCount) done")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            Button(action: jira.refresh) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.gray)
+                    .rotationEffect(.degrees(jira.isRefreshing ? 360 : 0))
+                    .animation(jira.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: jira.isRefreshing)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .disabled(jira.isRefreshing)
+            .help("Refresh")
+        }
+    }
+
+    /// "3 days left" until the sprint's end.
+    private var daysLeft: String? {
+        guard let end = jira.sprint?.endsAt else { return nil }
+        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()),
+                                                   to: Calendar.current.startOfDay(for: end)).day ?? 0
+        switch days {
+        case ..<0: return "ended"
+        case 0: return "ends today"
+        case 1: return "1 day left"
+        default: return "\(days) days left"
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "list.bullet.rectangle")
+                .font(.system(size: 18))
+                .foregroundColor(.gray.opacity(0.6))
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+            Button("Try Again", action: jira.refresh)
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct JiraIssueRow: View {
+    @EnvironmentObject var jira: JiraService
+    let issue: JiraService.Issue
+    @State private var isHovered = false
+
+    private var isDone: Bool { issue.progress == .done }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundColor(color)
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(issue.summary)
+                    .font(.system(size: 12))
+                    .foregroundColor(isDone ? .gray : .white)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Text(issue.key)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.gray)
+                    Text(issue.status)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(isDone ? .gray : color)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(color.opacity(isDone ? 0.1 : 0.18))
+                        .clipShape(Capsule())
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(isHovered ? 0.1 : 0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .opacity(isDone ? 0.7 : 1)
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+        .pointingHandCursor()
+        .onTapGesture { jira.open(issue) }
+        .help("Open \(issue.key) in Jira")
+    }
+
+    private var icon: String {
+        switch issue.progress {
+        case .inProgress: return "circle.lefthalf.filled"
+        case .toDo: return "circle"
+        case .done: return "checkmark.circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch issue.progress {
+        case .inProgress: return .blue
+        case .toDo: return .gray
+        case .done: return .green
+        }
+    }
 }
 
 // MARK: - VPN
