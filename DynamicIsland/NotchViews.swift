@@ -15,6 +15,10 @@ struct NotchIslandView: View {
     @EnvironmentObject var timerManager: TimerManager
     @EnvironmentObject var hud: HUDMonitor
     @EnvironmentObject var vpnManager: VPNManager
+    /// Shakes of the island for friends' pokes; each poke adds one.
+    @State private var pokeShakes: CGFloat = 0
+    /// A notification came in: the island squishes for a moment.
+    @State private var isSquished = false
 
     var body: some View {
         // The island is an overlay on a flexible clear base, so its size never becomes the hosting
@@ -22,12 +26,36 @@ struct NotchIslandView: View {
         // window) made AppKit resize the window mid-animation, looping layout until it crashed.
         Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .top) { island }
-            .onChange(of: hasActivity, initial: true) { _, active in
-                layout.setShowsWings(active)
+            .overlay(alignment: .top) {
+                island
+                    .modifier(ShakeEffect(shakes: pokeShakes))
+                    .scaleEffect(x: isSquished ? 0.93 : 1, y: 1, anchor: .top)
+            }
+            // The eyes live in the wings, so with them on the wings stay out.
+            .onChange(of: hasActivity || layout.showsEyes, initial: true) { _, show in
+                layout.setShowsWings(show)
             }
             .onChange(of: notificationManager.banner?.id) {
                 layout.setShowsBanner(notificationManager.banner != nil)
+                if layout.showsEyes, notificationManager.banner?.pokeSenderID != nil {
+                    FaceMood.shared.surprise()
+                }
+                if layout.pokeEffects, let banner = notificationManager.banner, banner.pokeSenderID != nil {
+                    // After the banner has dropped down.
+                    withAnimation(.linear(duration: 0.55).delay(0.25)) {
+                        pokeShakes += 1
+                    }
+                }
+            }
+            .onChange(of: notificationManager.unreadCount) { previous, count in
+                if layout.showsEyes && count > previous {
+                    FaceMood.shared.lookAtBadge()
+                }
+                guard layout.bouncyOpen, count > previous, !layout.isExpanded, !layout.showsBanner else { return }
+                withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) { isSquished = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.35)) { isSquished = false }
+                }
             }
             // Initial too: after floating mode the level may have gone while this view was away.
             .onChange(of: showsHUD, initial: true) { _, shows in
@@ -95,6 +123,19 @@ struct NotchIslandView: View {
         meet.meeting?.isInCall == true
     }
 
+    /// Nothing running: no music, Claude, timer, meeting, VPN or call. Unread notifications don't
+    /// count; they only show their number.
+    private var isStandingBy: Bool {
+        !(spotifyManager.isPlaying || claudeUsage.snapshot.isWorking || timerManager.isActive
+          || calendarManager.upcomingMeeting != nil || vpnManager.isConnected || isInMeet)
+    }
+
+    /// The face peeks out of the left wing while standing by, in place of the bell; anything
+    /// running takes its place.
+    private var showsFace: Bool {
+        layout.showsEyes && isStandingBy
+    }
+
     /// The meeting's icon is on the left only when nothing else is live.
     private var leftWingShowsMeeting: Bool {
         !claudeUsage.snapshot.isWorking && !spotifyManager.isPlaying && !timerManager.isActive && calendarManager.upcomingMeeting != nil
@@ -112,7 +153,9 @@ struct NotchIslandView: View {
     private var collapsedBar: some View {
         HStack(spacing: 0) {
             Group {
-                if isInMeet {
+                if showsFace {
+                    NotchEyes()
+                } else if isInMeet {
                     Image(systemName: meet.meeting?.isMicrophoneOn == false ? "mic.slash.fill" : "video.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(meet.meeting?.isMicrophoneOn == false ? .red : .green)
@@ -197,6 +240,11 @@ private struct NotchBannerView: View {
         notification.appName ?? ""
     }
 
+    /// A friend's poke, not the notch confirming one of yours.
+    private var isFriendsPoke: Bool {
+        notification.pokeSenderID != nil
+    }
+
     var body: some View {
         Group {
             if isReplying {
@@ -209,6 +257,13 @@ private struct NotchBannerView: View {
         // The top of the island sits behind the physical notch.
         .padding(.top, isInPanel ? 8 : layout.notchSize.height + 4)
         .padding(.bottom, 8)
+        // The poke's little weather, behind the text and buttons and as big as the banner. It's
+        // faint (see PokeSkyEffect), since it still shows through Reply's see-through background.
+        .background {
+            if isFriendsPoke && layout.pokeEffects {
+                PokeSkyEffect()
+            }
+        }
         .contentShape(Rectangle())
         // While replying the banner stays wherever the pointer goes.
         .onHover { hovering in
@@ -233,6 +288,7 @@ private struct NotchBannerView: View {
         HStack(spacing: 10) {
             NotificationIcon(notification: notification, symbolSize: 20)
                 .frame(width: 34, height: 34)
+                .modifier(PokeHandEntrance(isActive: isFriendsPoke && layout.pokeEffects))
 
             VStack(alignment: .leading, spacing: 1) {
                 if !appName.isEmpty && appName != notification.title {
@@ -301,7 +357,7 @@ private struct NotchBannerView: View {
                 .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(notification.body == PokeService.emptyMessageBody ? notification.title : "\(senderName): \(notification.body)")
+                Text(notification.body.isEmpty ? notification.title : "\(senderName): \(notification.body)")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.gray)
                     .lineLimit(1)
@@ -1108,6 +1164,11 @@ private struct SettingsMenu: View {
         Menu {
             Toggle("Open on Hover", isOn: $layout.openOnHover)
             Toggle("Show Volume & Brightness", isOn: $hud.isEnabled)
+            Menu("Animations") {
+                Toggle("Eyes Beside the Notch", isOn: $layout.showsEyes)
+                Toggle("Poke Effects", isOn: $layout.pokeEffects)
+                Toggle("Bouncy Opening", isOn: $layout.bouncyOpen)
+            }
             Toggle("Launch at Login", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.isEnabled = $0 }))
             Picker("Theme", selection: Binding(get: { themeManager.currentPreset }, set: { themeManager.setTheme($0) })) {
                 ForEach(ThemeManager.ThemePreset.allCases, id: \.self) { preset in

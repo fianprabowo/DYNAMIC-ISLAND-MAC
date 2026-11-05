@@ -125,8 +125,6 @@ class PokeService: ObservableObject {
     /// Pokes shown since launch; Realtime and catching up can both bring the same one.
     private var shownPokeIDs: Set<Int> = []
 
-    /// A poke's banner text when it came without a message.
-    static let emptyMessageBody = "👉"
 
     private static let urlKey = "pokeProjectURL"
     private static let keyKey = "pokeAnonKey"
@@ -483,7 +481,8 @@ class PokeService: ObservableObject {
         }
 
         let title = "\(poke.senderName) poked you"
-        let body = poke.message.isEmpty ? Self.emptyMessageBody : poke.message
+        // A poke without a message shows only "… poked you".
+        let body = poke.message
         if let createdAt = poke.createdAt, Date().timeIntervalSince(createdAt) > bannerMaxAge {
             notificationManager.post(.poke, title: title, body: body)
             return

@@ -38,6 +38,18 @@ class IslandLayout: ObservableObject {
     @Published var openOnHover: Bool {
         didSet { UserDefaults.standard.set(openOnHover, forKey: Self.openOnHoverKey) }
     }
+    /// Eyes in the wings beside the notch while nothing is live (gear menu → Animations).
+    @Published var showsEyes: Bool {
+        didSet { UserDefaults.standard.set(showsEyes, forKey: Self.showsEyesKey) }
+    }
+    /// A friend's poke shakes the notch and rains emoji.
+    @Published var pokeEffects: Bool {
+        didSet { UserDefaults.standard.set(pokeEffects, forKey: Self.pokeEffectsKey) }
+    }
+    /// A springier, jelly-like opening, and a little squish when a notification comes in.
+    @Published var bouncyOpen: Bool {
+        didSet { UserDefaults.standard.set(bouncyOpen, forKey: Self.bouncyOpenKey) }
+    }
     @Published var isExpanded = false
     /// Pinned open: the open notch doesn't close when the pointer leaves it or on a click elsewhere.
     @Published var staysOpen = false
@@ -82,6 +94,13 @@ class IslandLayout: ObservableObject {
     }
     /// Opening overshoots slightly, like the iPhone's Dynamic Island; closing settles smoothly.
     static let expandAnimation = Animation.spring(response: 0.42, dampingFraction: 0.72)
+    /// The bouncy opening: it overshoots further and wobbles before it settles.
+    static let bouncyAnimation = Animation.spring(response: 0.5, dampingFraction: 0.6)
+
+    /// How the island grows, as set in Animations.
+    var growAnimation: Animation {
+        bouncyOpen ? Self.bouncyAnimation : Self.expandAnimation
+    }
     static let collapseAnimation = Animation.spring(response: 0.36, dampingFraction: 0.9)
 
     /// Set by the notch window: enlarges it to the given size before a growing animation starts,
@@ -90,10 +109,16 @@ class IslandLayout: ObservableObject {
 
     private static let pinnedKey = "islandPinnedToNotch"
     private static let openOnHoverKey = "islandOpenOnHover"
+    private static let showsEyesKey = "islandShowsEyes"
+    private static let pokeEffectsKey = "islandPokeEffects"
+    private static let bouncyOpenKey = "islandBouncyOpen"
 
     init() {
         isPinnedToNotch = UserDefaults.standard.object(forKey: Self.pinnedKey) as? Bool ?? true
         openOnHover = UserDefaults.standard.object(forKey: Self.openOnHoverKey) as? Bool ?? true
+        showsEyes = UserDefaults.standard.object(forKey: Self.showsEyesKey) as? Bool ?? true
+        pokeEffects = UserDefaults.standard.object(forKey: Self.pokeEffectsKey) as? Bool ?? true
+        bouncyOpen = UserDefaults.standard.object(forKey: Self.bouncyOpenKey) as? Bool ?? true
         notchSize = Self.measureNotch()
     }
 
@@ -101,8 +126,9 @@ class IslandLayout: ObservableObject {
         CGSize(width: notchSize.width + (showsWings ? Self.notchWing * 2 : 0), height: notchSize.height)
     }
 
-    /// Transparent room around the open island so the opening spring's overshoot isn't clipped.
-    static let overshootMargin: CGFloat = 16
+    /// Transparent room around the open island so the opening spring's overshoot isn't clipped,
+    /// the bouncy one's and a poke's shake included.
+    static let overshootMargin: CGFloat = 24
 
     var notchBannerSize: CGSize {
         CGSize(width: 380, height: notchSize.height + 60)
@@ -242,12 +268,12 @@ class IslandLayout: ObservableObject {
 
     private func grow(to size: CGSize, _ change: @escaping () -> Void) {
         guard let prepareToGrow else {
-            withAnimation(Self.expandAnimation, change)
+            withAnimation(growAnimation, change)
             return
         }
         prepareToGrow(size)
         DispatchQueue.main.async {
-            withAnimation(Self.expandAnimation, change)
+            withAnimation(self.growAnimation, change)
         }
     }
 
