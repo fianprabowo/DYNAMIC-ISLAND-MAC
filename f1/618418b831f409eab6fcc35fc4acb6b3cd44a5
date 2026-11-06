@@ -1,0 +1,25 @@
+DynamicIsland/MyApp.swift
+  s_8d4b63dc56ae38::t_a3d0e3ca8e00ea 69
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_1e663970a02b14 350,448,709-710
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_b46f345567e6aa 124-125,176,530,541,546,559,561-564,572,578,587-597,601-602
+DynamicIsland/SpotifyManager.swift
+  s_8d4b63dc56ae38::t_d63e34e1aa0740 38-42,50-59,64,67,69-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "f1618418b831f409eab6fcc35fc4acb6b3cd44a5",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "unknown"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
