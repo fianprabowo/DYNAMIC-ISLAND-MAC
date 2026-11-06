@@ -49,13 +49,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Friends see a calendar beside your name in Poke while a meeting on your calendar is on or
-    /// you're in a Meet call.
+    /// you're in a Meet call, and the song you're listening to under it.
     private func shareMeetingsWithFriends() {
         calendarManager.$isInMeeting
             .combineLatest(meetController.$meeting.map { $0?.isInCall == true })
             .map { $0 || $1 }
             .removeDuplicates()
             .sink { [pokeService] in pokeService.setInMeeting($0) }
+            .store(in: &cancellables)
+
+        // Friends see the song too: Spotify or Music only, not YouTube in Chrome.
+        Publishers.CombineLatest4(spotifyManager.$isPlaying, spotifyManager.$currentTrack, spotifyManager.$currentArtist, spotifyManager.$sourceApp)
+            .map { isPlaying, track, artist, source -> String? in
+                guard isPlaying, source == .spotify || source == .music,
+                      !track.isEmpty, track != "No Track" else { return nil }
+                return artist.isEmpty ? track : "\(track) — \(artist)"
+            }
+            // The title and the artist change one after the other; say the song once.
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .removeDuplicates()
+            .sink { [pokeService] in pokeService.setNowPlaying($0) }
             .store(in: &cancellables)
     }
 

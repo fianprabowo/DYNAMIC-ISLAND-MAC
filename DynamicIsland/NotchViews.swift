@@ -1562,6 +1562,7 @@ private struct PinButton: View {
 
 private struct SettingsMenu: View {
     @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var poke: PokeService
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var hud: HUDMonitor
     @AppStorage(PokeSound.key) private var pokeSound = PokeSound.defaultName
@@ -1576,6 +1577,7 @@ private struct SettingsMenu: View {
                 Toggle("Bouncy Opening", isOn: $layout.bouncyOpen)
             }
             pokeSoundMenu
+            Toggle("Share What I'm Playing", isOn: $poke.sharesNowPlaying)
             Toggle("Launch at Login", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.isEnabled = $0 }))
             Picker("Theme", selection: Binding(get: { themeManager.currentPreset }, set: { themeManager.setTheme($0) })) {
                 ForEach(ThemeManager.ThemePreset.allCases, id: \.self) { preset in
@@ -3666,6 +3668,17 @@ private struct PokeFriendsView: View {
                                 .help(poke.isListening ? "Receiving pokes" : "Connecting…")
                             Text(profile.name)
                                 .font(.system(size: 12, weight: .semibold))
+                            if poke.isInMeeting {
+                                Image(systemName: "calendar")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundColor(.orange)
+                                    .help("Friends see you're in a meeting")
+                            }
+                        }
+                        // What friends see under your name.
+                        if let song = poke.sharedSong {
+                            SongLine(song: song)
+                                .help("Friends see you're listening to \(song)")
                         }
                         Button {
                             NSPasteboard.general.clearContents()
@@ -3963,8 +3976,27 @@ private struct PokeChat: View {
     }
 }
 
-/// A friend's name, with a green dot while they're online and a calendar while they're in a
-/// meeting; clicking picks them to poke. Hovering shows a button to remove them.
+/// The song someone is listening to, like "🎵 Song — Artist", on one line.
+private struct SongLine: View {
+    let song: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "music.note")
+                .font(.system(size: 8))
+                .foregroundColor(.green)
+            Text(song)
+                .font(.system(size: 9))
+                .foregroundColor(.gray)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+}
+
+/// A friend's name, with a green dot while they're online, a calendar while they're in a meeting
+/// and the song they're listening to below; clicking picks them to poke. Hovering shows a button
+/// to remove them.
 private struct FriendRow: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
@@ -3975,21 +4007,31 @@ private struct FriendRow: View {
 
     var body: some View {
         let isOnline = poke.isOnline(friend)
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             Circle()
                 .fill(isOnline ? Color.green : Color.white.opacity(0.25))
                 .frame(width: 6, height: 6)
+                .padding(.top, 4)
                 .animation(.easeInOut(duration: 0.2), value: isOnline)
                 .help(isOnline ? "\(friend.name) is online" : "\(friend.name) is offline")
-            Text(friend.name)
-                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-            if poke.isInMeeting(friend) {
-                Image(systemName: "calendar")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(.orange)
-                    .help("\(friend.name) is in a meeting")
-                    .transition(.opacity)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(friend.name)
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .lineLimit(1)
+                    if poke.isInMeeting(friend) {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(.orange)
+                            .help("\(friend.name) is in a meeting")
+                            .transition(.opacity)
+                    }
+                }
+                if let song = poke.song(of: friend) {
+                    SongLine(song: song)
+                        .help("\(friend.name) is listening to \(song)")
+                        .transition(.opacity)
+                }
             }
             Spacer(minLength: 0)
             if isPoked {

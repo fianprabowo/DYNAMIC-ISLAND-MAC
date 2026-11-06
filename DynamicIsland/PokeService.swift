@@ -95,6 +95,8 @@ class PokeService: ObservableObject {
     @Published private(set) var onlineUserIDs: Set<UUID> = []
     /// Those of them whose app says they're in a meeting (on any of their Macs).
     @Published private(set) var inMeetingUserIDs: Set<UUID> = []
+    /// What friends are listening to, like "Song — Artist", by who's listening.
+    @Published private(set) var songs: [UUID: String] = [:]
     /// Each connected app, by its presence key: whose it is, and whether they're in a meeting.
     /// One person can have several Macs.
     private var presences: [String: Presence] = [:] {
@@ -107,14 +109,40 @@ class PokeService: ObservableObject {
             if inMeeting != inMeetingUserIDs {
                 inMeetingUserIDs = inMeeting
             }
+            var playing: [UUID: String] = [:]
+            for presence in presences.values {
+                if let song = presence.song {
+                    playing[presence.userID] = song
+                }
+            }
+            if playing != songs {
+                songs = playing
+            }
         }
     }
     private struct Presence {
         let userID: UUID
         let isInMeeting: Bool
+        let song: String?
     }
     /// Whether this Mac's user is in a meeting now, told to friends through presence.
-    private var isInMeeting = false
+    @Published private(set) var isInMeeting = false
+    /// The song playing on this Mac, told to friends while `sharesNowPlaying` is on.
+    @Published private(set) var nowPlaying: String?
+    /// The song friends see under your name now; nil when nothing plays or sharing is off.
+    var sharedSong: String? {
+        sharesNowPlaying ? nowPlaying : nil
+    }
+    /// Friends see the song you're listening to under your name (gear menu).
+    @Published var sharesNowPlaying: Bool = UserDefaults.standard.object(forKey: PokeService.sharesNowPlayingKey) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(sharesNowPlaying, forKey: Self.sharesNowPlayingKey)
+            if nowPlaying != nil {
+                trackPresence()
+            }
+        }
+    }
+    private static let sharesNowPlayingKey = "pokeSharesNowPlaying"
 
     private(set) var projectURL: String {
         get { UserDefaults.standard.string(forKey: Self.urlKey) ?? "" }
@@ -155,6 +183,8 @@ class PokeService: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: Self.chatClearedKey) }
     }
 
+    /// The longest song text shown, so an odd one can't stretch the list.
+    private static let songLimit = 120
     private static let chatClearedKey = "pokeChatClearedUpTo"
     private static let urlKey = "pokeProjectURL"
     private static let keyKey = "pokeAnonKey"
@@ -339,17 +369,39 @@ class PokeService: ObservableObject {
         inMeetingUserIDs.contains(friend.id)
     }
 
+    func song(of friend: Friend) -> String? {
+        songs[friend.id]
+    }
+
     /// Tells friends whether you're in a meeting: only yes or no, never which meeting.
     func setInMeeting(_ value: Bool) {
         guard value != isInMeeting else { return }
         isInMeeting = value
+        trackPresence()
+    }
+
+    /// Tells friends the song playing now, like "Song — Artist"; nil when nothing plays.
+    func setNowPlaying(_ song: String?) {
+        guard song != nowPlaying else { return }
+        nowPlaying = song
+        if sharesNowPlaying {
+            trackPresence()
+        }
+    }
+
+    /// Says this app's state again, which friends' apps take as an update.
+    private func trackPresence() {
         guard let presenceChannel, presenceChannel.status == .subscribed, let userID = profile?.id else { return }
         let state = presenceState(userID: userID)
         Task { await presenceChannel.track(state: state) }
     }
 
     private func presenceState(userID: UUID) -> JSONObject {
-        ["user_id": .string(userID.uuidString.lowercased()), "in_meeting": .bool(isInMeeting)]
+        var state: JSONObject = ["user_id": .string(userID.uuidString.lowercased()), "in_meeting": .bool(isInMeeting)]
+        if sharesNowPlaying, let nowPlaying {
+            state["song"] = .string(nowPlaying)
+        }
+        return state
     }
 
     /// Fetches the latest pokes you and a friend sent each other. Supabase keeps a week of pokes.
@@ -478,7 +530,8 @@ class PokeService: ObservableObject {
     }
 
     /// Every connected app joins one shared Realtime channel and says whose it is (only the user
-    /// ID, which only friends can put a name to, and whether they're in a meeting). An app that
+    /// ID, which only friends can put a name to, whether they're in a meeting and the song they
+    /// play, unless they turned that off). An app that
     /// quits, sleeps or loses the network leaves it, so a friend in it is online.
     private func showOnline(client: SupabaseClient, userID: UUID) {
         let channel = client.channel("poke-online")
@@ -508,7 +561,8 @@ class PokeService: ObservableObject {
                     if let id = presence.state["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
                         // An app from before meetings were shared doesn't say; it counts as not in one.
                         let isInMeeting = presence.state["in_meeting"]?.boolValue ?? false
-                        self?.presences[key] = Presence(userID: id, isInMeeting: isInMeeting)
+                        let song = presence.state["song"]?.stringValue.map { String($0.prefix(Self.songLimit)) }
+                        self?.presences[key] = Presence(userID: id, isInMeeting: isInMeeting, song: song?.isEmpty == false ? song : nil)
                     }
                 }
                 self?.log.info("Online: \(self?.onlineUserIDs.count ?? 0) people")
