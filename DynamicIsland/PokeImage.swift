@@ -59,7 +59,7 @@ nonisolated enum PokeImage {
 
     /// A small copy to show in the chat: drawing the full picture there, scaled down on every frame
     /// of the notch opening, makes it stutter.
-    static func thumbnail(from data: Data, maxPixels: Int = 360) -> CGImage? {
+    static func thumbnail(from data: Data, maxPixels: Int = 520) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

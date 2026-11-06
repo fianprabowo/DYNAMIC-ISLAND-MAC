@@ -1194,14 +1194,17 @@ private struct TodoRow: View {
 /// Pritunl's profiles: each connects or disconnects with a click. A profile's PIN comes from
 /// PRITUNL_PIN in the zsh config, or is typed for one connection.
 private struct VPNView: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var vpn: VPNManager
 
-    /// Square tiles side by side, as many to a row as fit, spread evenly across the width.
-    static let tileSize: CGFloat = 112
+    /// Tiles side by side, as many to a row as fit, filling the width; and as tall as the rows
+    /// leave room for, so there's no empty space below. They're at least this big, scrolling if
+    /// there are too many.
+    private var tileSize: CGFloat { layout.wide(112, 150) }
     private let tileSpacing: CGFloat = 10
 
     private func columns(for width: CGFloat) -> [GridItem] {
-        let fit = max(1, Int((width + tileSpacing) / (Self.tileSize + tileSpacing)))
+        let fit = max(1, Int((width + tileSpacing) / (tileSize + tileSpacing)))
         let count = min(max(vpn.profiles.count, 1), fit)
         return Array(repeating: GridItem(.flexible(), spacing: tileSpacing, alignment: .center), count: count)
     }
@@ -1214,10 +1217,13 @@ private struct VPNView: View {
                 emptyMessage("No profiles yet. Import one in the Pritunl app.")
             } else {
                 GeometryReader { geometry in
+                    let columns = columns(for: geometry.size.width)
+                    let rows = max(1, (vpn.profiles.count + columns.count - 1) / columns.count)
+                    let fill = (geometry.size.height - tileSpacing * CGFloat(rows - 1)) / CGFloat(rows)
                     ScrollView {
-                        LazyVGrid(columns: columns(for: geometry.size.width), spacing: tileSpacing) {
+                        LazyVGrid(columns: columns, spacing: tileSpacing) {
                             ForEach(vpn.profiles) { profile in
-                                VPNProfileTile(profile: profile)
+                                VPNProfileTile(profile: profile, height: max(tileSize, fill))
                             }
                         }
                     }
@@ -1244,8 +1250,10 @@ private struct VPNView: View {
 /// One profile as a square tile: clicking it connects, or disconnects while it's connected. A green
 /// border shows it's connected, how long for underneath; the address it got shows on hover.
 private struct VPNProfileTile: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var vpn: VPNManager
     let profile: VPNManager.Profile
+    let height: CGFloat
     @State private var pin = ""
     @State private var isHovered = false
     @FocusState private var isPINFocused: Bool
@@ -1265,12 +1273,12 @@ private struct VPNProfileTile: View {
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: profile.isConnected ? "lock.shield.fill" : "lock.open")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: layout.wide(20, 30), weight: .semibold))
                 .foregroundColor(isDisconnecting ? .red : profile.isConnected ? vpnColor : isConnecting ? .orange : .gray)
-                .frame(height: 24)
+                .frame(height: layout.wide(24, 36))
 
             Text(profile.name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: layout.wide(11, 15), weight: .semibold))
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
 
@@ -1291,7 +1299,7 @@ private struct VPNProfileTile: View {
                 // Counts every second between Pritunl's reads, like Pritunl's own "Online For".
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(formatUptime(profile.uptime + Int(context.date.timeIntervalSince(vpn.refreshedAt))))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: layout.wide(10, 13), weight: .medium))
                         .foregroundColor(vpnColor)
                         .monospacedDigit()
                 }
@@ -1301,12 +1309,13 @@ private struct VPNProfileTile: View {
                     .frame(height: 13)
             } else {
                 Text("Off")
-                    .font(.system(size: 10))
+                    .font(.system(size: layout.wide(10, 13)))
                     .foregroundColor(.gray)
             }
         }
         .padding(8)
-        .frame(width: VPNView.tileSize, height: VPNView.tileSize)
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.white.opacity(isHovered ? 0.1 : 0.05))
@@ -1687,6 +1696,7 @@ private struct SettingsMenu: View {
 // MARK: - Timer
 /// A ring with the time left, presets, and Pomodoro (focus, then a break).
 private struct TimerView: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var timerManager: TimerManager
     @State private var choosingSound = false
 
@@ -1696,7 +1706,7 @@ private struct TimerView: View {
     var body: some View {
         HStack(spacing: 20) {
             ring
-                .frame(width: 104, height: 104)
+                .frame(width: layout.wide(104, 160), height: layout.wide(104, 160))
 
             if choosingSound {
                 soundList
@@ -1714,7 +1724,7 @@ private struct TimerView: View {
                     pomodoroCard
                     soundButton
                 }
-                .frame(width: 196)
+                .frame(width: layout.wide(196, 270))
             }
         }
         .frame(maxHeight: .infinity)
@@ -1729,14 +1739,14 @@ private struct TimerView: View {
                     Button { timerManager.start(minutes: minutes) } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 2) {
                             Text(minutes == 60 ? "1" : "\(minutes)")
-                                .font(.system(size: 17, weight: .bold, design: .rounded))
+                                .font(.system(size: layout.wide(17, 22), weight: .bold, design: .rounded))
                                 .monospacedDigit()
                             Text(minutes == 60 ? "hr" : "min")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundColor(.gray)
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(height: 38)
+                        .frame(height: layout.wide(38, 56))
                     }
                     .buttonStyle(TimerCardStyle())
                     .pointingHandCursor()
@@ -1958,7 +1968,7 @@ private struct TimerView: View {
 
                 VStack(spacing: 1) {
                     Text(timerManager.isActive ? formatCountdown(timerManager.remaining(at: context.date), compact: false) : "0:00")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .font(.system(size: layout.wide(22, 32), weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .opacity(timerManager.isActive && !timerManager.isRunning && !timerManager.isRinging ? 0.5 : 1)
                     Text(timerManager.isRinging ? "Time's Up" : timerManager.isActive ? timerManager.phase.title : "Ready")
@@ -2035,6 +2045,7 @@ private struct TimerCardStyle: ButtonStyle {
 
 // MARK: - Media
 private struct MediaWidget: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var spotifyManager: SpotifyManager
     @EnvironmentObject var mediaControlManager: MediaControlManager
 
@@ -2044,7 +2055,7 @@ private struct MediaWidget: View {
         HStack(spacing: 12) {
             ZStack(alignment: .bottomTrailing) {
                 artwork
-                    .frame(width: 76, height: 76)
+                    .frame(width: artworkSize, height: artworkSize)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 // Badge with the icon of the app that is playing, like NotchNook.
@@ -2062,15 +2073,15 @@ private struct MediaWidget: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(hasTrack ? spotifyManager.currentTrack : "Not Playing")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: layout.wide(13, 16), weight: .bold))
                     .lineLimit(1)
                 Text(hasTrack ? spotifyManager.currentAlbum : "Spotify or Music")
-                    .font(.system(size: 11))
+                    .font(.system(size: layout.wide(11, 13)))
                     .foregroundColor(.gray)
                     .lineLimit(1)
                 if hasTrack {
                     Text(spotifyManager.currentArtist)
-                        .font(.system(size: 11))
+                        .font(.system(size: layout.wide(11, 13)))
                         .foregroundColor(.gray)
                         .lineLimit(1)
                 }
@@ -2095,9 +2106,11 @@ private struct MediaWidget: View {
                     }
                 }
             }
-            .frame(height: 76)
+            .frame(height: artworkSize)
         }
     }
+
+    private var artworkSize: CGFloat { layout.wide(76, 120) }
 
     private var artwork: some View {
         Group {
@@ -2249,7 +2262,7 @@ private struct MediaTabView: View {
                     MediaWidget()
                     MediaProgressBar()
                 }
-                .frame(width: 230, alignment: .leading)
+                .frame(width: layout.wide(230, 340), alignment: .leading)
                 ColumnSeparator()
                 LyricsView()
             }
@@ -2606,6 +2619,7 @@ private struct LyricsView: View {
 
 /// Timed lyrics with the current line large and centered; the list scrolls as the song plays.
 private struct SyncedLyricsView: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var spotifyManager: SpotifyManager
     @EnvironmentObject var mediaControlManager: MediaControlManager
     let lines: [Lyrics.Line]
@@ -2626,7 +2640,7 @@ private struct SyncedLyricsView: View {
                                 spotifyManager.showPosition(line.time)
                             } label: {
                                 Text(line.text.isEmpty ? "♪" : line.text)
-                                    .font(.system(size: line.id == current ? 15 : 12, weight: .bold))
+                                    .font(.system(size: line.id == current ? layout.wide(15, 19) : layout.wide(12, 14), weight: .bold))
                                     .foregroundColor(.white.opacity(opacity(of: line.id, current: current)))
                                     .lineLimit(2)
                                     .multilineTextAlignment(.leading)
@@ -2706,6 +2720,7 @@ private struct ColumnSeparator: View {
 // MARK: - Nook
 /// The calendar on the left, the picked meeting in the middle, and Claude usage on the right.
 private struct NookView: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var calendarManager: CalendarManager
     @EnvironmentObject var meet: MeetController
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
@@ -2740,7 +2755,7 @@ private struct NookView: View {
             CalendarWidget(selectedDay: $selectedDay, highlightedEventID: shown?.id) { event in
                 selectedEventID = event.id
             }
-            .frame(width: 228, alignment: .leading)
+            .frame(width: layout.wide(228, 300), alignment: .leading)
 
             Group {
                 // A Meet call shows here live; a meeting open in Chrome, not joined yet, turns the
@@ -2759,7 +2774,7 @@ private struct NookView: View {
 
             ColumnSeparator()
             ClaudeUsageWidget()
-                .frame(width: 140, alignment: .leading)
+                .frame(width: layout.wide(140, 190), alignment: .leading)
         }
         .onChange(of: selectedDay) {
             selectedEventID = nil
@@ -3121,6 +3136,7 @@ private struct CallDuration: View {
 
 // MARK: - Calendar
 private struct CalendarWidget: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var calendarManager: CalendarManager
     @EnvironmentObject var themeManager: ThemeManager
 
@@ -3141,7 +3157,7 @@ private struct CalendarWidget: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(selectedDay, format: .dateTime.month(.abbreviated))
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: layout.wide(20, 24), weight: .bold))
                 HStack(spacing: 0) {
                     ForEach(days, id: \.self) { day in
                         dayColumn(day)
@@ -3177,14 +3193,14 @@ private struct CalendarWidget: View {
                     Text(day, format: .dateTime.weekday(.narrow))
                 }
             }
-            .font(.system(size: 7.5, weight: .semibold))
+            .font(.system(size: layout.wide(7.5, 9), weight: .semibold))
             .textCase(.uppercase)
 
             Text(day, format: .dateTime.day(.twoDigits))
-                .font(.system(size: isToday ? 15 : 12, weight: isToday ? .bold : .medium))
+                .font(.system(size: isToday ? layout.wide(15, 18) : layout.wide(12, 14), weight: isToday ? .bold : .medium))
         }
         .foregroundColor(color)
-        .frame(width: 24, height: 32)
+        .frame(width: layout.wide(24, 32), height: layout.wide(32, 40))
         .background(isSelected && !isToday ? Color.white.opacity(0.1) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
@@ -3437,25 +3453,26 @@ private let claudeOrange = Color(nsColor: claudeOrangeNS)
 /// Claude plan limits left (when the status line provides them) and today's Claude Code token
 /// usage with a 24-hour sparkline, in place of NotchNook's Mirror.
 private struct ClaudeUsageWidget: View {
+    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var claudeUsage: ClaudeUsageMonitor
 
     var body: some View {
         let usage = claudeUsage.snapshot
 
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: layout.wide(3, 6)) {
             HStack(spacing: 4) {
                 Group {
                     if usage.isWorking {
-                        PulsingSymbol(systemName: "sparkle", color: claudeOrangeNS, pointSize: 10)
+                        PulsingSymbol(systemName: "sparkle", color: claudeOrangeNS, pointSize: layout.wide(10, 13))
                     } else {
                         Image(systemName: "sparkle")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: layout.wide(10, 13), weight: .bold))
                             .foregroundColor(claudeOrange)
                     }
                 }
-                .frame(width: 12, height: 12)
+                .frame(width: layout.wide(12, 16), height: layout.wide(12, 16))
                 Text(usage.isWorking ? "Working…" : "Claude Code")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: layout.wide(10, 13), weight: .semibold))
                     .foregroundColor(usage.isWorking ? claudeOrange : .gray)
             }
 
@@ -3471,42 +3488,49 @@ private struct ClaudeUsageWidget: View {
     /// The limits take the room of the big token count, which shrinks to a footer.
     @ViewBuilder
     private func limitsAndTokens(_ usage: ClaudeUsageSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: layout.wide(6, 10)) {
             if let limit = usage.fiveHourLimit {
-                RateLimitBar(title: "5-hour", limit: limit, showsWeekday: false)
+                RateLimitBar(title: "5-hour", limit: limit, showsWeekday: false, isLarge: layout.isWide)
             }
             if let limit = usage.weeklyLimit {
-                RateLimitBar(title: "Week", limit: limit, showsWeekday: true)
+                RateLimitBar(title: "Week", limit: limit, showsWeekday: true, isLarge: layout.isWide)
             }
         }
         .padding(.top, 2)
 
-        Sparkline(values: usage.hourlyTokens, color: claudeOrange, maxBarHeight: 14)
-            .frame(height: 14)
+        // Wide, the hours' bars get taller and the replies show too, so the column is filled.
+        Sparkline(values: usage.hourlyTokens, color: claudeOrange, maxBarHeight: layout.wide(14, 40))
+            .frame(height: layout.wide(14, 40))
             .padding(.top, 2)
 
         Text("\(formatTokens(usage.todayTokens)) tokens today")
-            .font(.system(size: 9))
+            .font(.system(size: layout.wide(9, 12)))
             .foregroundColor(.gray)
             .lineLimit(1)
+        if layout.isWide {
+            Text("\(usage.todayReplies) replies · \(formatTokens(usage.todayOutputTokens)) out")
+                .font(.system(size: 12))
+                .foregroundColor(.gray)
+                .lineLimit(1)
+        }
     }
 
     @ViewBuilder
     private func tokens(_ usage: ClaudeUsageSnapshot) -> some View {
         Text(formatTokens(usage.todayTokens))
-            .font(.system(size: 22, weight: .bold))
+            .font(.system(size: layout.wide(22, 30), weight: .bold))
             .monospacedDigit()
             .contentTransition(.numericText())
         Text("tokens today")
-            .font(.system(size: 9))
+            .font(.system(size: layout.wide(9, 12)))
             .foregroundColor(.gray)
 
-        Sparkline(values: usage.hourlyTokens, color: claudeOrange)
-            .frame(height: 20)
+        Sparkline(values: usage.hourlyTokens, color: claudeOrange, maxBarHeight: layout.wide(20, 50))
+            .frame(height: layout.wide(20, 50))
             .padding(.vertical, 2)
 
         Text("\(usage.todayReplies) replies · \(formatTokens(usage.todayOutputTokens)) out")
-            .font(.system(size: 9))
+            .font(.system(size: layout.wide(9, 12)))
             .foregroundColor(.gray)
             .lineLimit(1)
     }
@@ -3517,19 +3541,21 @@ private struct RateLimitBar: View {
     let title: String
     let limit: ClaudeRateLimit
     let showsWeekday: Bool
+    /// Bigger in the wide notch.
+    var isLarge = false
 
     var body: some View {
         let remaining = limit.remainingFraction
         let isLow = remaining < 0.2
 
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: isLarge ? 4 : 2) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: isLarge ? 12 : 9, weight: .semibold))
                     .foregroundColor(.gray)
                 Spacer(minLength: 4)
                 Text("\(Int((remaining * 100).rounded()))% left")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: isLarge ? 14 : 10, weight: .bold))
                     .monospacedDigit()
                     .foregroundColor(isLow ? .red : nil)
             }
@@ -3542,7 +3568,7 @@ private struct RateLimitBar: View {
                         .frame(width: remaining > 0 ? max(5, proxy.size.width * remaining) : 0)
                 }
             }
-            .frame(height: 5)
+            .frame(height: isLarge ? 8 : 5)
 
             Group {
                 if let resetsAt = limit.resetsAt {
@@ -3551,7 +3577,7 @@ private struct RateLimitBar: View {
                     Text("not started")
                 }
             }
-            .font(.system(size: 8))
+            .font(.system(size: isLarge ? 11 : 8))
             .foregroundColor(.gray)
             .lineLimit(1)
         }
@@ -3819,7 +3845,7 @@ private struct PokeFriendsView: View {
                     .scrollIndicators(.never)
                 }
             }
-            .frame(width: 190, alignment: .leading)
+            .frame(width: layout.wide(190, 260), alignment: .leading)
 
             Rectangle()
                 .fill(Color.white.opacity(0.12))
@@ -4201,6 +4227,7 @@ private struct PokeChat: View {
 /// A picture in the chat, downloaded when it first shows; clicked, it opens in Preview.
 private struct PokeChatImage: View {
     @EnvironmentObject var poke: PokeService
+    @EnvironmentObject var layout: IslandLayout
     let path: String
     /// Shown at once when the notch opens again, so the chat doesn't jump while it grows.
     @State private var image: NSImage?
@@ -4219,7 +4246,7 @@ private struct PokeChatImage: View {
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
-                        .frame(maxWidth: 170, maxHeight: 130)
+                        .frame(maxWidth: layout.wide(170, 260), maxHeight: layout.wide(130, 190))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)

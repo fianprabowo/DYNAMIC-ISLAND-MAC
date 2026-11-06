@@ -226,6 +226,11 @@ class IslandLayout: ObservableObject {
     /// and the content fades back in at the new size.
     static let resizeAnimation = Animation.spring(response: 0.35, dampingFraction: 1)
 
+    /// A size for the usual open notch, or for the wide one: the tabs use the room it adds.
+    func wide<T>(_ normal: T, _ wide: T) -> T {
+        isWide ? wide : normal
+    }
+
     func setWide(_ wide: Bool) {
         guard wide != isWide, !isResizing else { return }
         guard isExpanded else {
