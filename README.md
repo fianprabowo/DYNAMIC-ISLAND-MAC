@@ -30,7 +30,7 @@ A Dynamic Island for the MacBook notch, in the style of NotchNook. It's a menu b
   - **Alerts:** every notification, from the app and from other apps. Remove them one by one or clear them all. The latest 50 are kept, also across restarts, in `~/Library/Application Support/<bundle id>/notifications.json` (message text included).
   - **Poke:** friends who also run Dynamic Island. Pick a friend from the list (a green dot means they're online, an orange calendar that they're in a meeting, and under their name 🎵 the song they're listening to in Spotify or Music; turn off sharing yours in ⚙ → *Share What I'm Playing*) and press Enter in the message field (or click *Poke*), with or without a short message (the smiley in the field opens an emoji popup: a click adds one): their notch drops down with "Alfian poked you", and a ping sounds (pick another sound in ⚙ → *Poke Sound*: resting on one plays it, and *Choose Sound File…* adds one of your own, copied to `~/Library/Sounds` on your Mac only). *Poke Back* pokes right back; *Reply* turns the banner into a message field right there: type and press Enter to send, or Escape to cancel. A click elsewhere on the banner opens the Poke tab on the chat with that friend. Under the message field, the last 20 pokes with the picked friend, newest on top ("jho: …", "you: …"); hovering shows a trash can, which empties that chat on your Mac only (your friend still sees it, and new pokes show up as usual). Needs a shared Supabase project (see [Poke](#poke)).
   - **Timer:** a countdown with presets (1 minute to 1 hour), pause, +1 minute and stop, and Pomodoro: 25 minutes of focus, then a 5-minute break that starts on its own. A sound plays when it ends. With *Turn On Focus*, Pomodoro turns a Focus on for the focus part (see [Focus during Pomodoro](#focus-during-pomodoro)).
-  - **Todo** (right of the notch, beside the VPN tab): your own todo list on the left, and the Jira issues assigned to you in your open sprints on the right. Type and press Enter to add a todo, click its circle to tick it off, hover over it to delete it, and *Clear Done* removes the ticked-off ones. Todos are kept in the Supabase project Poke uses, so Poke has to be set up first, and the project needs [`supabase/todo.sql`](supabase/todo.sql). The Jira side shows the sprint's name and days left, then your issues: in progress first, then to do, then done; click one to open it in Jira (see [Todo](#todo)).
+  - **Todo** (right of the notch, beside the VPN tab): your own todos on the left, and on the right the todos you share with a friend, picked by name at the top. Both of you can add to a shared list, tick its todos off and delete them, and a change shows on the other Mac at once; a todo your friend added shows their name under it. Type and press Enter to add a todo; the calendar in the field gives it a date and time (type or step it, or pick *Today* or *Tomorrow*), shown under it and red once it's past. Open todos with a date come first, soonest on top. Click a todo's circle to tick it off, hover over it to delete it, and *Clear Done* removes the ticked-off ones. Todos are kept in the Supabase project Poke uses, so Poke has to be set up first, and the project needs [`supabase/todo.sql`](supabase/todo.sql) (see [Todo](#todo)).
   - **VPN** (right of the notch, next to the pin): the profiles in the [Pritunl](https://pritunl.com) client as square tiles. Click a tile to connect, and again to disconnect: a connected one has a green border and shows how long it's been up (hover for the address it got), one connecting an orange border, and one disconnecting turns red. A profile that needs a PIN takes it from `PRITUNL_PIN` in your zsh config (e.g. `PRITUNL_PIN=123456` in `~/.zshrc`; it needn't be exported, which keeps it out of the environment of programs started from a terminal), and uses it for every profile, since a Pritunl PIN belongs to the user. Otherwise it asks for the PIN on each connect and doesn't keep it. The app never stores the PIN itself, not in the keychain and not on disk; keep `~/.zshrc` readable by you only (`chmod 600 ~/.zshrc`). While a VPN is connected a green lock shows beside the notch, and the notch drops down when a VPN connects or drops, also one started in the Pritunl app. Needs the Pritunl client in `/Applications`; the notch uses its command-line tool, so Pritunl's own service does the connecting. The PIN is typed in at the tool's password prompt, never passed as a command-line argument, where other processes could read it.
 
 - **Floating mode.** Turn off *Pin to Notch* in the menu bar icon's menu to let the island float freely.
@@ -134,26 +134,12 @@ Then everyone, on their own Mac: open the notch's **Poke** tab, paste the URL an
 
 ## Todo
 
-The Todo tab keeps each person's todos in the same Supabase project as Poke, under the same anonymous sign-in. Whoever set up the project runs [`supabase/todo.sql`](supabase/todo.sql) once in its *SQL Editor*; until then the tab says so.
+The Todo tab keeps each person's todos in the same Supabase project as Poke, under the same anonymous sign-in. Whoever set up the project runs [`supabase/todo.sql`](supabase/todo.sql) in its *SQL Editor*; running it again is safe and brings an older version up to date. Until then the tab says so.
 
-- Row level security lets each person read and change only their own todos; friends can't see them.
-- A todo is up to 200 characters, and each person can have up to 200 todos. The database records when each was added and ticked off.
-- The list belongs to this Mac's sign-in: *Change Project* in the Poke tab, or losing `~/Library/Application Support/<bundle id>/Poke/`, starts a new, empty list.
-
-### Jira sprint
-
-The Jira side reads Jira Cloud's REST API with your own API token, and only reads: the issues assigned to you in your open sprints (`assignee = currentUser() AND sprint in openSprints()`). To set it up:
-
-1. Create an API token at [id.atlassian.com → Security → API tokens](https://id.atlassian.com/manage-profile/security/api-tokens) with *Create API token* (not the one with scopes).
-2. Add your site, email and token to your zsh config, without `export`. This asks for the token without showing it or keeping it in the shell history:
-
-   ```sh
-   read -s "token?Jira API token: " && print -rl -- "" "JIRA_SITE=yoursite.atlassian.net" "JIRA_EMAIL=you@company.com" "JIRA_API_TOKEN='$token'" >> ~/.zshrc && unset token && chmod 600 ~/.zshrc
-   ```
-
-3. Click the refresh arrow on the Jira side.
-
-The app reads the three values from a login zsh when the tab opens, keeps the token in memory only, sends it to that `atlassian.net` site only (redirects aren't followed) and never logs it. The list is read again when you open the tab after a minute or more, or click refresh. If your organization turns off API tokens, Jira turns the token down and the tab says so.
+- Your own todos are yours only. A shared todo belongs to the two of you: both can see it, tick it off and delete it, and only friends can share. Row level security keeps everyone else out.
+- Shared todos change on both Macs at once through Realtime.
+- A todo is up to 200 characters, with an optional date and time it's due, and each person can add up to 200 todos. The database records who added each, when, and when it was ticked off.
+- The lists belong to this Mac's sign-in: *Change Project* in the Poke tab, or losing `~/Library/Application Support/<bundle id>/Poke/`, starts with empty lists. Todos shared with a friend you remove stay in both lists until one of you deletes them.
 
 ## Focus during Pomodoro
 

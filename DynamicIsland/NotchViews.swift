@@ -774,28 +774,170 @@ private struct NotchExpandedView: View {
 }
 
 // MARK: - Todo
-/// Your own todos on the left, and on the right the Jira issues assigned to you in your open sprints.
+/// Your own todos on the left; on the right the ones you share with a friend, which you both can
+/// add to, tick off and delete. Both are kept in the Supabase project Poke uses.
 private struct TodoView: View {
+    @EnvironmentObject var todo: TodoService
+    @EnvironmentObject var layout: IslandLayout
+
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            MyTodosColumn()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(width: 1)
-            JiraSprintColumn()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        Group {
+            switch todo.state {
+            case .needsProject:
+                TodoPlaceholder(symbol: "checklist", text: "Todos are kept in the Supabase project Poke uses. Set it up in the Poke tab first.",
+                                button: "Open Poke") { layout.selectedTab = .poke }
+            case .needsTable:
+                TodoPlaceholder(symbol: "tablecells", text: "Run supabase/todo.sql in the Supabase project's SQL Editor (again, if you ran an older one), then try again.",
+                                button: "Try Again", action: todo.refresh)
+            case .failed(let message):
+                TodoPlaceholder(symbol: "exclamationmark.triangle", text: message, button: "Try Again", action: todo.refresh)
+            case .loading:
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .ready:
+                HStack(alignment: .top, spacing: 14) {
+                    MyTodosColumn()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.08))
+                        .frame(width: 1)
+                    SharedTodosColumn()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+            }
+        }
+        .onAppear { todo.refresh() }
+    }
+}
+
+/// Your own todo list.
+private struct MyTodosColumn: View {
+    @EnvironmentObject var todo: TodoService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(header)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                Spacer()
+                ClearDoneButton(shared: false)
+            }
+            TodoList(items: todo.todos, placeholder: "Add a todo", emptyText: "Nothing to do") {
+                todo.add($0, due: $1, shared: false)
+            }
+        }
+    }
+
+    private var header: String {
+        if todo.todos.isEmpty { return "My todos" }
+        let remaining = todo.remainingCount(shared: false)
+        return remaining == 0 ? "My todos · all done" : "My todos · \(remaining) to do"
+    }
+}
+
+/// The todos you share with a friend, picked from the names at the top.
+private struct SharedTodosColumn: View {
+    @EnvironmentObject var todo: TodoService
+    @EnvironmentObject var poke: PokeService
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var themeManager: ThemeManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Shared with")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.gray)
+                    .fixedSize()
+                ScrollView(.horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(poke.friends) { friend in
+                            friendChip(friend)
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+                ClearDoneButton(shared: true)
+            }
+
+            if let friend = todo.sharedFriend {
+                TodoList(items: todo.sharedTodos, placeholder: "Add a todo for you and \(friend.name)",
+                         emptyText: "Nothing shared with \(friend.name) yet", showsAdder: true) {
+                    todo.add($0, due: $1, shared: true)
+                }
+            } else {
+                VStack(spacing: 8) {
+                    Text("Add a friend in the Poke tab to share todos with them.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                    Button("Open Poke") { layout.selectedTab = .poke }
+                        .buttonStyle(.plain)
+                        .pointingHandCursor()
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func friendChip(_ friend: PokeService.Friend) -> some View {
+        let isSelected = friend.id == todo.sharedFriend?.id
+        return Button { todo.sharedFriendID = friend.id } label: {
+            Text(friend.name)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .foregroundColor(isSelected ? .white : .gray)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(isSelected ? Color(themeManager.currentTheme.accentColor).opacity(0.35) : Color.white.opacity(0.07))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("Todos shared with \(friend.name)")
+    }
+}
+
+/// Deletes the ticked-off todos of one list.
+private struct ClearDoneButton: View {
+    @EnvironmentObject var todo: TodoService
+    let shared: Bool
+
+    var body: some View {
+        if todo.hasDone(shared: shared) {
+            Button("Clear Done") {
+                withAnimation { todo.clearDone(shared: shared) }
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.gray)
+            .fixedSize()
         }
     }
 }
 
-/// Your own todo list, kept in the Supabase project Poke uses (see supabase/todo.sql). Type and
-/// press Enter to add; click the circle to tick one off; hover to delete it.
-private struct MyTodosColumn: View {
+/// A list's add field and its todos: type and press Enter to add, click the circle to tick one
+/// off, hover to delete it. The calendar in the field gives the new todo a date and time.
+private struct TodoList: View {
     @EnvironmentObject var todo: TodoService
-    @EnvironmentObject var layout: IslandLayout
     @EnvironmentObject var themeManager: ThemeManager
+    let items: [TodoService.Todo]
+    let placeholder: String
+    let emptyText: String
+    /// On a shared list, a todo the friend added says so.
+    var showsAdder = false
+    let add: (String, Date?) -> Void
     @State private var newTitle = ""
+    /// When the new todo is due, while the date row is open.
+    @State private var due: Date?
     @FocusState private var isFieldFocused: Bool
 
     private var accent: Color { Color(themeManager.currentTheme.accentColor) }
@@ -804,86 +946,58 @@ private struct MyTodosColumn: View {
     }
 
     var body: some View {
-        Group {
-            switch todo.state {
-            case .needsProject:
-                placeholder("checklist", "Todos are kept in the Supabase project Poke uses. Set it up in the Poke tab first.",
-                            button: "Open Poke") { layout.selectedTab = .poke }
-            case .needsTable:
-                placeholder("tablecells", "Run supabase/todo.sql in the Supabase project's SQL Editor, then try again.",
-                            button: "Try Again", action: todo.refresh)
-            case .failed(let message):
-                placeholder("exclamationmark.triangle", message, button: "Try Again", action: todo.refresh)
-            case .loading:
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .ready:
-                list
-            }
-        }
-        .onAppear { todo.refresh() }
-    }
-
-    private var list: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(header)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.gray)
-                Spacer()
-                if todo.hasDone {
-                    Button("Clear Done") {
-                        withAnimation { todo.clearDone() }
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor()
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.gray)
-                }
-            }
-
             HStack(spacing: 8) {
-                TextField("Add a todo", text: $newTitle)
+                TextField(placeholder, text: $newTitle)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .focused($isFieldFocused)
-                    .onSubmit(add)
+                    .onSubmit(submit)
                     .onChange(of: newTitle) { _, title in
                         if title.count > TodoService.maxTitleLength {
                             newTitle = String(title.prefix(TodoService.maxTitleLength))
                         }
                     }
-                if todo.isAdding {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else {
-                    Button(action: add) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 15))
-                            .foregroundColor(canAdd ? accent : .gray)
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor()
-                    .disabled(!canAdd)
-                    .help("Add")
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { due = due == nil ? Self.nextHour() : nil }
+                } label: {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 13))
+                        .foregroundColor(due == nil ? .gray : accent)
                 }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help(due == nil ? "Add a date and time" : "No date")
+                Button(action: submit) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundColor(canAdd ? accent : .gray)
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .disabled(!canAdd)
+                .help("Add")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(Color.white.opacity(0.07))
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
-            if todo.todos.isEmpty {
-                Text("Nothing to do")
+            if let current = due {
+                dueRow(current)
+            }
+
+            if items.isEmpty {
+                Text(emptyText)
                     .font(.system(size: 11))
                     .foregroundColor(.gray.opacity(0.7))
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 4) {
-                        ForEach(todo.todos) { item in
-                            TodoRow(item: item, accent: accent)
+                        ForEach(items) { item in
+                            TodoRow(item: item, accent: accent, adder: showsAdder ? todo.adderName(of: item) : nil)
                                 .transition(.opacity)
                         }
                     }
@@ -900,20 +1014,65 @@ private struct MyTodosColumn: View {
         }
     }
 
-    private var header: String {
-        if todo.todos.isEmpty { return "My todos" }
-        let remaining = todo.remainingCount
-        return remaining == 0 ? "My todos · all done" : "My todos · \(remaining) to do"
+    /// The new todo's date and time, typed or stepped in the field (a calendar popover would sit
+    /// outside the notch and close it), with quick picks.
+    private func dueRow(_ current: Date) -> some View {
+        HStack(spacing: 6) {
+            DatePicker("Due", selection: Binding(get: { current }, set: { due = $0 }),
+                       displayedComponents: [.date, .hourAndMinute])
+                .labelsHidden()
+                .datePickerStyle(.field)
+                .controlSize(.small)
+            quickPick("Today") { Self.nextHour() }
+            quickPick("Tomorrow") { Self.tomorrowMorning() }
+            Spacer(minLength: 0)
+        }
+        .transition(.opacity)
     }
 
-    private func add() {
+    private func quickPick(_ title: String, _ date: @escaping () -> Date) -> some View {
+        Button(title) { due = date() }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(.gray)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Color.white.opacity(0.08))
+            .clipShape(Capsule())
+            .fixedSize()
+    }
+
+    /// The next full hour, like 15:00 at 14:20.
+    private static func nextHour() -> Date {
+        let calendar = Calendar.current
+        let hour = calendar.dateInterval(of: .hour, for: Date())?.start ?? Date()
+        return calendar.date(byAdding: .hour, value: 1, to: hour) ?? Date()
+    }
+
+    /// Tomorrow at 09:00.
+    private static func tomorrowMorning() -> Date {
+        let calendar = Calendar.current
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? Date()
+        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
+    }
+
+    private func submit() {
         guard canAdd else { return }
-        todo.add(newTitle)
+        add(newTitle, due)
         newTitle = ""
+        withAnimation(.easeOut(duration: 0.15)) { due = nil }
         isFieldFocused = true
     }
+}
 
-    private func placeholder(_ symbol: String, _ text: String, button: String, action: @escaping () -> Void) -> some View {
+private struct TodoPlaceholder: View {
+    let symbol: String
+    let text: String
+    let button: String
+    let action: () -> Void
+
+    var body: some View {
         VStack(spacing: 8) {
             Image(systemName: symbol)
                 .font(.system(size: 22))
@@ -922,7 +1081,7 @@ private struct MyTodosColumn: View {
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
+                .frame(maxWidth: 360)
             Button(button, action: action)
                 .buttonStyle(.plain)
                 .pointingHandCursor()
@@ -940,6 +1099,8 @@ private struct TodoRow: View {
     @EnvironmentObject var todo: TodoService
     let item: TodoService.Todo
     let accent: Color
+    /// The friend who added it, on a shared list.
+    var adder: String?
     @State private var isHovered = false
 
     var body: some View {
@@ -955,13 +1116,33 @@ private struct TodoRow: View {
             .pointingHandCursor()
             .help(item.isDone ? "Mark as not done" : "Mark as done")
 
-            Text(item.title)
-                .font(.system(size: 12))
-                .strikethrough(item.isDone, color: .gray)
-                .foregroundColor(item.isDone ? .gray : .white)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.system(size: 12))
+                    .strikethrough(item.isDone, color: .gray)
+                    .foregroundColor(item.isDone ? .gray : .white)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if item.dueAt != nil || adder != nil {
+                    // Every minute, so a todo turns red once its time has passed.
+                    TimelineView(.everyMinute) { context in
+                        HStack(spacing: 3) {
+                            if let dueAt = item.dueAt {
+                                Image(systemName: "clock")
+                                    .font(.system(size: 8.5))
+                                Text(Self.dueLabel(dueAt, now: context.date))
+                            }
+                            if let adder {
+                                Text(item.dueAt == nil ? adder : "· \(adder)")
+                            }
+                        }
+                        .font(.system(size: 9.5))
+                        .foregroundColor(item.isOverdue(at: context.date) ? .red : .gray)
+                        .lineLimit(1)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 withAnimation { todo.delete(item) }
@@ -982,177 +1163,23 @@ private struct TodoRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .onHover { isHovered = $0 }
     }
-}
 
-/// The Jira issues assigned to you in your open sprints: the ones in progress first, then the ones
-/// to do, then the done ones, dimmed. Clicking one opens it in the browser.
-private struct JiraSprintColumn: View {
-    @EnvironmentObject var jira: JiraService
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            header
-
-            switch jira.state {
-            case .needsSetup:
-                note("Add \(JiraService.siteVariable), \(JiraService.emailVariable) and \(JiraService.tokenVariable) to your zsh config to see your sprint here.")
-            case .failed(let message):
-                note(message)
-            case .loading:
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .ready:
-                if jira.issues.isEmpty {
-                    Text("Nothing assigned to you in an open sprint")
-                        .font(.system(size: 11))
-                        .foregroundColor(.gray.opacity(0.7))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 4) {
-                            ForEach(jira.issues) { JiraIssueRow(issue: $0) }
-                        }
-                    }
-                    .scrollIndicators(.never)
-                }
-            }
+    /// "Today 14.00", "Tomorrow 09.00", "Fri 8 Nov 10.00", with the year when it isn't this one.
+    static func dueLabel(_ date: Date, now: Date) -> String {
+        let calendar = Calendar.current
+        let time = date.formatted(.dateTime.hour().minute())
+        if calendar.isDate(date, inSameDayAs: now) { return "Today \(time)" }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
+            return "Tomorrow \(time)"
         }
-        .onAppear { jira.refreshIfStale() }
-    }
-
-    private var header: some View {
-        HStack(spacing: 6) {
-            Text(jira.sprint?.name ?? "Jira sprint")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.gray)
-                .lineLimit(1)
-            if let left = daysLeft {
-                Text(left)
-                    .font(.system(size: 10))
-                    .foregroundColor(.gray.opacity(0.7))
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            if jira.state == .ready && !jira.issues.isEmpty {
-                Text("\(jira.openCount) open · \(jira.doneCount) done")
-                    .font(.system(size: 10))
-                    .foregroundColor(.gray)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-            Button(action: jira.refresh) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.gray)
-                    .rotationEffect(.degrees(jira.isRefreshing ? 360 : 0))
-                    .animation(jira.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: jira.isRefreshing)
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .disabled(jira.isRefreshing)
-            .help("Refresh")
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday \(time)"
         }
-    }
-
-    /// "3 days left" until the sprint's end.
-    private var daysLeft: String? {
-        guard let end = jira.sprint?.endsAt else { return nil }
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()),
-                                                   to: Calendar.current.startOfDay(for: end)).day ?? 0
-        switch days {
-        case ..<0: return "ended"
-        case 0: return "ends today"
-        case 1: return "1 day left"
-        default: return "\(days) days left"
-        }
-    }
-
-    private func note(_ text: String) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: "list.bullet.rectangle")
-                .font(.system(size: 18))
-                .foregroundColor(.gray.opacity(0.6))
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-            Button("Try Again", action: jira.refresh)
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.white.opacity(0.12))
-                .clipShape(Capsule())
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct JiraIssueRow: View {
-    @EnvironmentObject var jira: JiraService
-    let issue: JiraService.Issue
-    @State private var isHovered = false
-
-    private var isDone: Bool { issue.progress == .done }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 13))
-                .foregroundColor(color)
-                .frame(width: 14)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(issue.summary)
-                    .font(.system(size: 12))
-                    .foregroundColor(isDone ? .gray : .white)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    Text(issue.key)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.gray)
-                    Text(issue.status)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(isDone ? .gray : color)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(color.opacity(isDone ? 0.1 : 0.18))
-                        .clipShape(Capsule())
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.white.opacity(isHovered ? 0.1 : 0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .opacity(isDone ? 0.7 : 1)
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .pointingHandCursor()
-        .onTapGesture { jira.open(issue) }
-        .help("Open \(issue.key) in Jira")
-    }
-
-    private var icon: String {
-        switch issue.progress {
-        case .inProgress: return "circle.lefthalf.filled"
-        case .toDo: return "circle"
-        case .done: return "checkmark.circle.fill"
-        }
-    }
-
-    private var color: Color {
-        switch issue.progress {
-        case .inProgress: return .blue
-        case .toDo: return .gray
-        case .done: return .green
-        }
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        let day = sameYear
+            ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+            : date.formatted(.dateTime.day().month(.abbreviated).year())
+        return "\(day) \(time)"
     }
 }
 

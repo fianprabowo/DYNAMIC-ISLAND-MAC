@@ -100,36 +100,3 @@ nonisolated enum CommandRunner {
     }
 }
 
-/// Settings kept as variables in the user's zsh config, like `JIRA_API_TOKEN=…` in `~/.zshrc`.
-/// They needn't be exported, which keeps them out of the environment of every program started
-/// from a terminal. launchd opens the app and reads no zsh config, so a login, interactive zsh is
-/// asked for them; it prints each value between markers, so whatever its startup files print is
-/// left out, and no value is ever in a command line.
-nonisolated enum ShellConfig {
-    /// The variables that are set and not empty, by name. The app's own environment (when it was
-    /// opened from a terminal) comes first.
-    static func values(_ names: [String]) async -> [String: String] {
-        var values: [String: String] = [:]
-        let environment = ProcessInfo.processInfo.environment
-        for name in names {
-            if let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-                values[name] = value
-            }
-        }
-        let missing = names.filter { values[$0] == nil && $0.wholeMatch(of: /[A-Z_][A-Z0-9_]*/) != nil }
-        guard !missing.isEmpty else { return values }
-
-        let script = missing.map { "print -rn -- '<\($0)>'\"${\($0)}\"'</\($0)>'" }.joined(separator: "; ")
-        guard let data = await CommandRunner.run("/bin/zsh", ["-l", "-i", "-c", script], timeout: 15),
-              let output = String(data: data, encoding: .utf8) else { return values }
-        for name in missing {
-            guard let opening = output.range(of: "<\(name)>"),
-                  let closing = output.range(of: "</\(name)>", range: opening.upperBound..<output.endIndex) else { continue }
-            let value = output[opening.upperBound..<closing.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                values[name] = value
-            }
-        }
-        return values
-    }
-}

@@ -37,7 +37,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let pokeService = PokeService.shared
     let vpnManager = VPNManager.shared
     let todoService = TodoService.shared
-    let jiraService = JiraService.shared
     let meetController = MeetController()
     private var cancellables: Set<AnyCancellable> = []
 
@@ -117,7 +116,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(pokeService)
                     .environmentObject(vpnManager)
                     .environmentObject(todoService)
-                    .environmentObject(jiraService)
                     .environmentObject(meetController)
             )
         )
@@ -596,6 +594,5 @@ struct SettingsView: View {
         .environmentObject(PokeService.shared)
         .environmentObject(VPNManager.shared)
         .environmentObject(TodoService.shared)
-        .environmentObject(JiraService.shared)
         .environmentObject(MeetController())
 }
