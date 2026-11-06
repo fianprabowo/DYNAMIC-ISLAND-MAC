@@ -59,12 +59,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Friends see the song too: Spotify or Music only, not YouTube in Chrome.
         Publishers.CombineLatest4(spotifyManager.$isPlaying, spotifyManager.$currentTrack, spotifyManager.$currentArtist, spotifyManager.$sourceApp)
-            .map { isPlaying, track, artist, source -> String? in
+            .combineLatest(spotifyManager.$spotifyTrackURI)
+            .map { playing, uri -> PokeService.Song? in
+                let (isPlaying, track, artist, source) = playing
                 guard isPlaying, source == .spotify || source == .music,
                       !track.isEmpty, track != "No Track" else { return nil }
-                return artist.isEmpty ? track : "\(track) — \(artist)"
+                return PokeService.Song(text: artist.isEmpty ? track : "\(track) — \(artist)", spotifyURI: source == .spotify ? uri : nil)
             }
-            // The title and the artist change one after the other; say the song once.
+            // The title, the artist and the id change one after the other; say the song once.
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [pokeService] in pokeService.setNowPlaying($0) }

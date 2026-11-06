@@ -21,6 +21,8 @@ class SpotifyManager: ObservableObject {
     /// Players with something loaded, for switching between them in the Media tab.
     @Published private(set) var availableSources: [MediaPlayerApp] = []
     @Published var artwork: NSImage?
+    /// Spotify's id for the track playing in Spotify, like "spotify:track:…"; nil for other players.
+    @Published private(set) var spotifyTrackURI: String?
 
     private var pollTask: Task<Void, Never>?
     private var artworkTrackKey: String?
@@ -123,6 +125,9 @@ class SpotifyManager: ObservableObject {
         }
         currentTrack = snapshot.track
         currentArtist = snapshot.artist
+        if spotifyTrackURI != snapshot.spotifyURI {
+            spotifyTrackURI = snapshot.spotifyURI
+        }
         currentAlbum = snapshot.album
         duration = snapshot.duration
         if isCurrent || switched {
@@ -226,6 +231,7 @@ class SpotifyManager: ObservableObject {
         var youTubeTab: String?
         var youTubeVideoID: String?
         var isControllable = true
+        var spotifyURI: String?
     }
 
     private func fetchSnapshot(from app: MediaPlayerApp) async -> Snapshot? {
@@ -234,17 +240,19 @@ class SpotifyManager: ObservableObject {
         }
         // Spotify reports duration in milliseconds, Music in seconds.
         let durationExpression = app == .spotify ? "(duration of current track) / 1000" : "duration of current track"
+        // Spotify's track id lets a friend play the same song; Music's ids mean nothing elsewhere.
+        let uriExpression = app == .spotify ? "id of current track" : "\"\""
         let source = """
         tell application "\(app.scriptName)"
             if player state is stopped then return {}
-            return {name of current track, artist of current track, player position, \(durationExpression), player state as string, album of current track}
+            return {name of current track, artist of current track, player position, \(durationExpression), player state as string, album of current track, \(uriExpression)}
         end tell
         """
 
-        guard let result = await AppleScriptRunner.run(source), result.numberOfItems == 6,
+        guard let result = await AppleScriptRunner.run(source), result.numberOfItems == 7,
               let track = result.atIndex(1)?.stringValue, !track.isEmpty else { return nil }
 
-        return Snapshot(
+        var snapshot = Snapshot(
             track: track,
             artist: result.atIndex(2)?.stringValue ?? "",
             album: result.atIndex(6)?.stringValue ?? "",
@@ -252,6 +260,8 @@ class SpotifyManager: ObservableObject {
             duration: result.atIndex(4)?.doubleValue ?? 0,
             isPlaying: result.atIndex(5)?.stringValue == "playing"
         )
+        snapshot.spotifyURI = result.atIndex(7)?.stringValue.flatMap(SongPlayer.validSpotifyURI)
+        return snapshot
     }
 
     /// The playing YouTube tab, otherwise the first one.

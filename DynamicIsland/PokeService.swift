@@ -43,6 +43,11 @@ class PokeService: ObservableObject {
         let senderName: String
         let message: String
         let createdAt: Date?
+        /// When the recipient's app got it; nil until then (or before supabase/poke.sql added it).
+        var deliveredAt: Date?
+        /// When the recipient opened the chat with it; nil until then (or before supabase/poke.sql
+        /// added it).
+        var seenAt: Date?
 
         enum CodingKeys: String, CodingKey {
             case id, message
@@ -50,6 +55,8 @@ class PokeService: ObservableObject {
             case recipientID = "recipient_id"
             case senderName = "sender_name"
             case createdAt = "created_at"
+            case deliveredAt = "delivered_at"
+            case seenAt = "seen_at"
         }
 
         init(from decoder: Decoder) throws {
@@ -95,8 +102,14 @@ class PokeService: ObservableObject {
     @Published private(set) var onlineUserIDs: Set<UUID> = []
     /// Those of them whose app says they're in a meeting (on any of their Macs).
     @Published private(set) var inMeetingUserIDs: Set<UUID> = []
-    /// What friends are listening to, like "Song — Artist", by who's listening.
-    @Published private(set) var songs: [UUID: String] = [:]
+    /// What friends are listening to, by who's listening.
+    @Published private(set) var songs: [UUID: Song] = [:]
+
+    /// A song playing: "Song — Artist", and Spotify's id for it when it plays in Spotify.
+    nonisolated struct Song: Equatable, Sendable {
+        let text: String
+        let spotifyURI: String?
+    }
     /// Each connected app, by its presence key: whose it is, and whether they're in a meeting.
     /// One person can have several Macs.
     private var presences: [String: Presence] = [:] {
@@ -109,7 +122,7 @@ class PokeService: ObservableObject {
             if inMeeting != inMeetingUserIDs {
                 inMeetingUserIDs = inMeeting
             }
-            var playing: [UUID: String] = [:]
+            var playing: [UUID: Song] = [:]
             for presence in presences.values {
                 if let song = presence.song {
                     playing[presence.userID] = song
@@ -125,14 +138,14 @@ class PokeService: ObservableObject {
         let ref: String
         let userID: UUID
         let isInMeeting: Bool
-        let song: String?
+        let song: Song?
     }
     /// Whether this Mac's user is in a meeting now, told to friends through presence.
     @Published private(set) var isInMeeting = false
     /// The song playing on this Mac, told to friends while `sharesNowPlaying` is on.
-    @Published private(set) var nowPlaying: String?
+    @Published private(set) var nowPlaying: Song?
     /// The song friends see under your name now; nil when nothing plays or sharing is off.
-    var sharedSong: String? {
+    var sharedSong: Song? {
         sharesNowPlaying ? nowPlaying : nil
     }
     /// Friends see the song you're listening to under your name (gear menu).
@@ -174,6 +187,9 @@ class PokeService: ObservableObject {
     private var channel: RealtimeChannelV2?
     private var presenceChannel: RealtimeChannelV2?
     private var presenceTasks: [Task<Void, Never>] = []
+    private var markingSeen: Set<UUID> = []
+    private var isMarkingDelivered = false
+    private var markDeliveredAgain = false
     private var listenTasks: [Task<Void, Never>] = []
     private var retryTask: Task<Void, Never>?
     /// Pokes shown since launch; Realtime and catching up can both bring the same one.
@@ -372,7 +388,7 @@ class PokeService: ObservableObject {
         inMeetingUserIDs.contains(friend.id)
     }
 
-    func song(of friend: Friend) -> String? {
+    func song(of friend: Friend) -> Song? {
         songs[friend.id]
     }
 
@@ -383,8 +399,8 @@ class PokeService: ObservableObject {
         trackPresence()
     }
 
-    /// Tells friends the song playing now, like "Song — Artist"; nil when nothing plays.
-    func setNowPlaying(_ song: String?) {
+    /// Tells friends the song playing now; nil when nothing plays.
+    func setNowPlaying(_ song: Song?) {
         guard song != nowPlaying else { return }
         nowPlaying = song
         if sharesNowPlaying {
@@ -402,7 +418,10 @@ class PokeService: ObservableObject {
     private func presenceState(userID: UUID) -> JSONObject {
         var state: JSONObject = ["user_id": .string(userID.uuidString.lowercased()), "in_meeting": .bool(isInMeeting)]
         if sharesNowPlaying, let nowPlaying {
-            state["song"] = .string(nowPlaying)
+            state["song"] = .string(nowPlaying.text)
+            if let uri = nowPlaying.spotifyURI {
+                state["song_uri"] = .string(uri)
+            }
         }
         return state
     }
@@ -437,6 +456,58 @@ class PokeService: ObservableObject {
         pokes.insert(poke, at: 0)
         pokes.sort { $0.id > $1.id }
         history[friendID] = Array(pokes.prefix(Self.historyLimit))
+    }
+
+    /// A poke in an open chat changed, like being seen.
+    private func updateInHistory(_ poke: Poke) {
+        guard let friendID = poke.recipientID, var pokes = history[friendID],
+              let index = pokes.firstIndex(where: { $0.id == poke.id }) else { return }
+        pokes[index] = poke
+        history[friendID] = pokes
+    }
+
+    /// Tells senders their pokes reached this Mac (two grey ticks in their chat). Pokes arriving
+    /// together are marked in one go.
+    private func markDelivered() async {
+        guard let client else { return }
+        guard !isMarkingDelivered else {
+            markDeliveredAgain = true
+            return
+        }
+        isMarkingDelivered = true
+        repeat {
+            markDeliveredAgain = false
+            do {
+                try await client.rpc("mark_pokes_delivered").execute()
+            } catch {
+                // Before supabase/poke.sql added it, there's no such function; nothing is marked.
+                log.error("Marking pokes delivered failed: \(String(describing: error), privacy: .public)")
+            }
+        } while markDeliveredAgain
+        isMarkingDelivered = false
+    }
+
+    /// Marks a friend's pokes in the open chat as seen, which their app shows under yours.
+    func markSeen(from friendID: UUID) async {
+        guard let client, let pokes = history[friendID], !markingSeen.contains(friendID),
+              pokes.contains(where: { $0.senderID == friendID && $0.seenAt == nil }) else { return }
+        markingSeen.insert(friendID)
+        defer { markingSeen.remove(friendID) }
+        do {
+            try await client.rpc("mark_pokes_seen", params: ["friend": friendID.uuidString.lowercased()]).execute()
+            let now = Date()
+            history[friendID] = history[friendID]?.map { poke in
+                var poke = poke
+                if poke.senderID == friendID && poke.seenAt == nil {
+                    poke.seenAt = now
+                    poke.deliveredAt = poke.deliveredAt ?? now
+                }
+                return poke
+            }
+        } catch {
+            // Before supabase/poke.sql added it, there's no such function; nothing is marked.
+            log.error("Marking pokes seen failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     func isFromMe(_ poke: Poke) -> Bool {
@@ -494,6 +565,8 @@ class PokeService: ObservableObject {
         stopListening()
         let channel = client.channel("pokes:\(userID.uuidString.lowercased())")
         let inserts = channel.postgresChange(InsertAction.self, table: "pokes", filter: .eq("recipient_id", value: userID))
+        // A friend opening the chat marks your pokes seen.
+        let updates = channel.postgresChange(UpdateAction.self, table: "pokes", filter: .eq("sender_id", value: userID))
         self.channel = channel
 
         listenTasks.append(Task { [weak self] in
@@ -513,6 +586,13 @@ class PokeService: ObservableObject {
                 } catch {
                     // It's fetched by the next check instead.
                     self?.log.error("Couldn't read a poke from Realtime: \(String(describing: error), privacy: .public)")
+                }
+            }
+        })
+        listenTasks.append(Task { [weak self] in
+            for await update in updates {
+                if let poke = try? update.decodeRecord(as: Poke.self, decoder: PostgrestClient.Configuration.jsonDecoder) {
+                    self?.updateInHistory(poke)
                 }
             }
         })
@@ -568,8 +648,10 @@ class PokeService: ObservableObject {
                     if let id = presence.state["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
                         // An app from before meetings were shared doesn't say; it counts as not in one.
                         let isInMeeting = presence.state["in_meeting"]?.boolValue ?? false
-                        let song = presence.state["song"]?.stringValue.map { String($0.prefix(Self.songLimit)) }
-                        self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song?.isEmpty == false ? song : nil)
+                        let text = presence.state["song"]?.stringValue.map { String($0.prefix(Self.songLimit)) } ?? ""
+                        let uri = presence.state["song_uri"]?.stringValue.flatMap(SongPlayer.validSpotifyURI)
+                        let song = text.isEmpty ? nil : Song(text: text, spotifyURI: uri)
+                        self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song)
                     }
                 }
                 self?.log.info("Online: \(self?.onlineUserIDs.count ?? 0) people")
@@ -640,6 +722,7 @@ class PokeService: ObservableObject {
         guard shownPokeIDs.insert(poke.id).inserted else { return }
         log.info("Poke \(poke.id) from \(source, privacy: .public)")
         lastPokeID = max(lastPokeID ?? 0, poke.id)
+        Task { await markDelivered() }
         addToHistory(poke, friendID: poke.senderID)
         if !friends.contains(where: { $0.id == poke.senderID }) {
             refreshFriends()

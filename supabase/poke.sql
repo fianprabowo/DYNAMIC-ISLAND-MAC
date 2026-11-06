@@ -28,6 +28,10 @@ create table if not exists public.pokes (
   message text not null default '' check (char_length(message) <= 100),
   created_at timestamptz not null default now()
 );
+-- When the recipient's app got it and when they opened the chat with it: the sender's chat shows
+-- two grey ticks, then two green ones.
+alter table public.pokes add column if not exists delivered_at timestamptz;
+alter table public.pokes add column if not exists seen_at timestamptz;
 create index if not exists pokes_recipient_id on public.pokes (recipient_id, id);
 create index if not exists pokes_sender_created on public.pokes (sender_id, created_at);
 
@@ -72,6 +76,8 @@ begin
     raise exception 'Too many pokes, wait a minute';
   end if;
   new.created_at := now();
+  new.delivered_at := null;
+  new.seen_at := null;
   delete from pokes where created_at < now() - interval '7 days';
   return new;
 end $$;
@@ -138,6 +144,20 @@ language sql security definer set search_path = public as $$
   where (user_id = auth.uid() and friend_id = friend) or (user_id = friend and friend_id = auth.uid());
 $$;
 
+-- Marks what friends sent the signed-in user as delivered, and what one friend sent as seen;
+-- only the recipient can.
+create or replace function public.mark_pokes_delivered() returns void
+language sql security definer set search_path = public as $$
+  update pokes set delivered_at = now()
+  where recipient_id = auth.uid() and delivered_at is null;
+$$;
+
+create or replace function public.mark_pokes_seen(friend uuid) returns void
+language sql security definer set search_path = public as $$
+  update pokes set seen_at = now(), delivered_at = coalesce(delivered_at, now())
+  where recipient_id = auth.uid() and sender_id = friend and seen_at is null;
+$$;
+
 create or replace function public.list_friends()
 returns table (id uuid, name text)
 language sql stable security definer set search_path = public as $$
@@ -146,8 +166,8 @@ language sql stable security definer set search_path = public as $$
   order by p.name;
 $$;
 
-revoke execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends from public, anon;
-grant execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends to authenticated;
+revoke execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends, public.mark_pokes_delivered, public.mark_pokes_seen from public, anon;
+grant execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends, public.mark_pokes_delivered, public.mark_pokes_seen to authenticated;
 
 -- New pokes reach the recipient's notch right away.
 do $$

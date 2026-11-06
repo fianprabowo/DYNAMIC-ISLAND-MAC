@@ -3750,8 +3750,8 @@ private struct PokeFriendsView: View {
                         }
                         // What friends see under your name.
                         if let song = poke.sharedSong {
-                            SongLine(song: song)
-                                .help("Friends see you're listening to \(song)")
+                            SongLine(song: song.text)
+                                .help("Friends see you're listening to \(song.text)")
                         }
                     }
                 }
@@ -3787,74 +3787,11 @@ private struct PokeFriendsView: View {
                 .frame(width: 1)
                 .padding(.vertical, 2)
 
+            // Like a messenger: the chat, and the message field at the bottom.
             VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top, spacing: 10) {
-                    HStack(alignment: .top, spacing: 6) {
-                        TextField(selectedFriend.map { "Message to \($0.name) (optional)" } ?? "Pick a friend on the left", text: $message, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                            .lineLimit(2, reservesSpace: true)
-                            .focused($isMessageFocused)
-                            .onSubmit(send)
-                            .onExitCommand { showsEmoji = false }
-
-                        Button { showsEmoji.toggle() } label: {
-                            Image(systemName: "face.smiling")
-                                .font(.system(size: 14))
-                                .foregroundColor(showsEmoji ? .white : .gray)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .pointingHandCursor()
-                        .help("Emoji")
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .background(Color.white.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .disabled(selectedFriend == nil)
-
-                    Button(action: send) {
-                        VStack(spacing: 4) {
-                            Image(systemName: "hand.point.right.fill")
-                                .font(.system(size: 20))
-                            Text("Poke")
-                                .font(.system(size: 12, weight: .semibold))
-                        }
-                        .frame(width: 84)
-                        .frame(maxHeight: .infinity)
-                        // Green from the click until Supabase has the poke.
-                        .background(justPokedSelected ? Color.green : pokeColor)
-                        .animation(.easeInOut(duration: 0.08), value: justPokedSelected)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
-                    .pointingHandCursor()
-                    .disabled(selectedFriend == nil)
-                    .opacity(selectedFriend == nil ? 0.4 : 1)
-                    .help(selectedFriend.map { "Poke \($0.name)" } ?? "")
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messageRowHeight = $0 }
-                // The emoji popup drops down from the field, over the chat below it. Above the field
-                // it would reach into the tab bar, behind the Mac's own notch.
-                .overlay(alignment: .topTrailing) {
-                    if showsEmoji {
-                        PokeEmojiPopup(onPick: addEmoji)
-                            .offset(y: messageRowHeight + 4)
-                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .topTrailing)))
-                    }
-                }
-                .animation(.easeOut(duration: 0.12), value: showsEmoji)
-                .zIndex(1)
-
-                if let error = poke.actionError {
-                    PokeError(message: error)
-                }
-
                 if let friend = selectedFriend {
                     PokeChat(friend: friend)
+                        .frame(maxHeight: .infinity)
                         // A click beside the open popup closes it, like in other messengers.
                         .overlay {
                             if showsEmoji {
@@ -3863,7 +3800,29 @@ private struct PokeFriendsView: View {
                                     .onTapGesture { showsEmoji = false }
                             }
                         }
+                } else {
+                    Text("Pick a friend on the left")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+
+                if let error = poke.actionError {
+                    PokeError(message: error)
+                }
+
+                composer
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messageRowHeight = $0 }
+                    // The emoji popup opens up from the field, over the chat.
+                    .overlay(alignment: .bottomTrailing) {
+                        if showsEmoji {
+                            PokeEmojiPopup(onPick: addEmoji)
+                                .offset(y: -(messageRowHeight + 4))
+                                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottomTrailing)))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.12), value: showsEmoji)
+                    .zIndex(1)
             }
         }
         .onChange(of: selectedFriend?.id) { showsEmoji = false }
@@ -3871,6 +3830,54 @@ private struct PokeFriendsView: View {
             if let id = selectedFriend?.id {
                 await poke.loadHistory(with: id)
             }
+        }
+    }
+
+    /// One line to type in, the emoji button, and Poke. Enter pokes too.
+    private var composer: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                TextField(selectedFriend.map { "Message \($0.name)" } ?? "Message", text: $message)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .focused($isMessageFocused)
+                    .onSubmit(send)
+                    .onExitCommand { showsEmoji = false }
+
+                Button { showsEmoji.toggle() } label: {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 13))
+                        .foregroundColor(showsEmoji ? .white : .gray)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help("Emoji")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.white.opacity(0.1)))
+            .disabled(selectedFriend == nil)
+
+            // A round send button, like WhatsApp's; with nothing typed it sends a plain poke, and
+            // shows the poking hand instead.
+            let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            Button(action: send) {
+                Image(systemName: hasMessage ? "paperplane.fill" : "hand.point.right.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 28, height: 28)
+                    // Green from the click until Supabase has the poke.
+                    .background(Circle().fill(justPokedSelected ? Color.green : pokeColor))
+                    .animation(.easeInOut(duration: 0.08), value: justPokedSelected)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .disabled(selectedFriend == nil)
+            .opacity(selectedFriend == nil ? 0.4 : 1)
+            .help(selectedFriend.map { hasMessage ? "Send to \($0.name)" : "Poke \($0.name)" } ?? "")
         }
     }
 
@@ -3952,70 +3959,93 @@ private struct PokeEmojiPopup: View {
     }
 }
 
-/// The latest pokes between you and a friend, newest on top, like "jho: see you". Hovering shows
-/// a button that clears the chat on this Mac only.
+/// The latest pokes between you and a friend, like a messenger: yours on the right, theirs on
+/// the left, the newest at the bottom. The trash can at the top clears the chat on this Mac only.
 private struct PokeChat: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
-    @State private var isHovered = false
 
     var body: some View {
         let pokes = poke.history[friend.id] ?? []
-        // The trash can has its own column on the right, so it never covers a poke's time.
-        HStack(alignment: .top, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
+            header(isEmpty: pokes.isEmpty)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(pokes) { item in
-                        row(item)
+                LazyVStack(spacing: 3) {
+                    ForEach(pokes.reversed()) { item in
+                        bubble(item)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
+            .defaultScrollAnchor(.bottom)
             .scrollIndicators(.never)
+            .overlay {
+                if pokes.isEmpty {
+                    Text("No pokes with \(friend.name) yet")
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+        // The chat is on screen (the Poke tab only exists while the notch is open), so whatever
+        // the friend sent is seen, also a poke arriving now.
+        .task(id: pokes.first?.id) {
+            await poke.markSeen(from: friend.id)
+        }
+    }
 
-            if !pokes.isEmpty {
+    private func header(isEmpty: Bool) -> some View {
+        HStack(spacing: 6) {
+            Text(friend.name)
+                .font(.system(size: 11, weight: .semibold))
+            Spacer(minLength: 0)
+            if !isEmpty {
                 Button {
                     poke.clearChat(with: friend.id)
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.gray)
-                        .frame(width: 14, height: 14)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
-                .opacity(isHovered ? 1 : 0)
-                .animation(.easeInOut(duration: 0.12), value: isHovered)
                 .help("Clear this chat on your Mac; \(friend.name) still sees it")
             }
         }
-        .overlay {
-            if pokes.isEmpty {
-                Text("No pokes with \(friend.name) yet")
-                    .font(.system(size: 10))
-                    .foregroundColor(.gray)
-            }
-        }
-        .onHover { isHovered = $0 }
     }
 
-    private func row(_ item: PokeService.Poke) -> some View {
+    private func bubble(_ item: PokeService.Poke) -> some View {
         let isMine = poke.isFromMe(item)
-        return HStack(alignment: .firstTextBaseline, spacing: 6) {
-            (Text(isMine ? "you: " : "\(friend.name): ")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(isMine ? .gray : pokeColor)
-             + message(item, isMine: isMine))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let date = item.createdAt {
-                Text(Self.time(date))
-                    .font(.system(size: 9))
-                    .foregroundColor(.gray.opacity(0.7))
+        return HStack(spacing: 0) {
+            if isMine {
+                Spacer(minLength: 40)
+            }
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                message(item, isMine: isMine)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 2) {
+                    if let date = item.createdAt {
+                        Text(Self.time(date))
+                            .font(.system(size: 8))
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    if isMine {
+                        PokeTicks(poke: item, friendName: friend.name)
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(isMine ? pokeColor.opacity(0.45) : Color.white.opacity(0.12))
+            )
+            .textSelection(.enabled)
+            if !isMine {
+                Spacer(minLength: 40)
             }
         }
-        .textSelection(.enabled)
     }
 
     /// A poke without a message reads "poked".
@@ -4035,17 +4065,61 @@ private struct PokeChat: View {
 
 /// The song someone is listening to, like "🎵 Song — Artist", on one line that scrolls when the
 /// song doesn't fit.
+/// With `onPlay`, clicking plays the song here (a play symbol shows on hover).
 private struct SongLine: View {
     let song: String
+    var onPlay: (() -> Void)?
+    @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "music.note")
+        let highlighted = onPlay != nil && isHovered
+        let content = HStack(spacing: 3) {
+            Image(systemName: highlighted ? "play.fill" : "music.note")
                 .font(.system(size: 8))
                 .foregroundColor(.green)
+                .frame(width: 8)
             MarqueeText(text: song, font: .system(size: 9))
-                .foregroundColor(.gray)
+                .foregroundColor(highlighted ? .white : .gray)
         }
+        if let onPlay {
+            Button(action: onPlay) {
+                content.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .onHover { isHovered = $0 }
+        } else {
+            content
+        }
+    }
+}
+
+/// Ticks after your poke's time: one grey when sent, two grey once it reached your friend's
+/// Mac, two green once they opened the chat.
+private struct PokeTicks: View {
+    let poke: PokeService.Poke
+    let friendName: String
+
+    var body: some View {
+        let isDelivered = poke.deliveredAt != nil || poke.seenAt != nil
+        ZStack(alignment: .leading) {
+            Image(systemName: "checkmark")
+            if isDelivered {
+                Image(systemName: "checkmark")
+                    .offset(x: 4)
+            }
+        }
+        .font(.system(size: 8, weight: .bold))
+        .frame(width: 12, alignment: .leading)
+        .foregroundColor(poke.seenAt != nil ? .green : .gray.opacity(0.8))
+        .help(help)
+    }
+
+    private var help: String {
+        if let seenAt = poke.seenAt {
+            return "Read by \(friendName) at \(seenAt.formatted(date: .omitted, time: .shortened))"
+        }
+        return poke.deliveredAt != nil ? "Delivered to \(friendName)" : "Sent"
     }
 }
 
@@ -4129,8 +4203,8 @@ private struct FriendRow: View {
                     .transition(.opacity)
             }
             if let song = poke.song(of: friend) {
-                SongLine(song: song)
-                    .help("\(friend.name) is listening to \(song)")
+                SongLine(song: song.text) { SongPlayer.play(song) }
+                    .help("\(friend.name) is listening to \(song.text). Click to play it")
                     .transition(.opacity)
             }
             Spacer(minLength: 0)
