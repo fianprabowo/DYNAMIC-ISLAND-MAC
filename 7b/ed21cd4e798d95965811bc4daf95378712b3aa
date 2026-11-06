@@ -1,0 +1,21 @@
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_23a5098de9572c 3829-3831
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_2ba2752602ab29 191-193,734-740
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "7bed21cd4e798d95965811bc4daf95378712b3aa",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "unknown"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
