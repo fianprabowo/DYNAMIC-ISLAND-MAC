@@ -1,0 +1,36 @@
+DynamicIsland/MyApp.swift
+  s_8d4b63dc56ae38::t_328261e76d3429 62-64,67,69
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_750768d48c0ca9 3790,3794,3803-3807,3809-3825,3836-3883,3962-3963,3970-3971,3973-3975,3978,3980,3982-3995,3997-4002,4018,4020-4046,4113
+  s_8d4b63dc56ae38::t_7b4907e9d4aa43 4096-4112,4114-4116,4118-4120,4122
+  s_8d4b63dc56ae38::t_2131c60312f894 3753-3754,4068,4071-4072,4075-4077,4080,4082-4095,4117,4206-4207
+supabase/poke.sql
+  s_8d4b63dc56ae38::t_86fc0f674b10c0 153,158-160,169-170
+  s_8d4b63dc56ae38::t_5dbb1e5b0d8227 80
+  s_8d4b63dc56ae38::t_f9ff9be213fcdd 31-34,79,147-152,154-157
+DynamicIsland/SpotifyManager.swift
+  s_8d4b63dc56ae38::t_328261e76d3429 24-25,128-130,234,243-244,248,252,255,263-264
+README.md
+  s_8d4b63dc56ae38::t_ca8652553da0a6 31
+DynamicIsland/SongPlayer.swift
+  s_8d4b63dc56ae38::t_b2787b9856ee03 1-23
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_328261e76d3429 48-50,59,105-112,125,141,146,148,190,391,402-403,421-424,461-468,490-502,504-512,568-569,592-598,651-654
+  s_8d4b63dc56ae38::t_7b4907e9d4aa43 46-47,58,191-192,469-489,503,725
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "028f716647080ff37a0a8cba4622a155a27fe442",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
