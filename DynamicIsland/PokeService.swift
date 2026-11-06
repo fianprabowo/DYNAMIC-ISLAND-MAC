@@ -66,8 +66,31 @@ class PokeService: ObservableObject {
             recipientID = try container.decodeIfPresent(UUID.self, forKey: .recipientID)
             senderName = try container.decode(String.self, forKey: .senderName)
             message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
-            // Realtime and the REST API format times differently; a poke is shown either way.
-            createdAt = try? container.decode(Date.self, forKey: .createdAt)
+            createdAt = Self.date(in: container, forKey: .createdAt)
+            deliveredAt = Self.date(in: container, forKey: .deliveredAt)
+            seenAt = Self.date(in: container, forKey: .seenAt)
+        }
+
+        /// Realtime and the REST API format times differently, like `2026-11-06T08:20:34.027432+00:00`
+        /// and `2026-11-06 08:20:34.027432+00`; a poke is shown either way, without the time if unreadable.
+        private static func date(in container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Date? {
+            if let date = try? container.decodeIfPresent(Date.self, forKey: key) { return date }
+            guard let text = try? container.decodeIfPresent(String.self, forKey: key) else { return nil }
+            var normalized = text.replacingOccurrences(of: " ", with: "T")
+            // "+00" → "+00:00"
+            if let sign = normalized.lastIndex(where: { $0 == "+" || $0 == "-" }),
+               normalized.distance(from: sign, to: normalized.endIndex) == 3 {
+                normalized += ":00"
+            }
+            let formatter = ISO8601DateFormatter()
+            // Without an offset, the time is UTC.
+            for candidate in [normalized, normalized + "Z"] {
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = formatter.date(from: candidate) { return date }
+                formatter.formatOptions = [.withInternetDateTime]
+                if let date = formatter.date(from: candidate) { return date }
+            }
+            return nil
         }
     }
 
@@ -594,8 +617,12 @@ class PokeService: ObservableObject {
         })
         listenTasks.append(Task { [weak self] in
             for await update in updates {
-                if let poke = try? update.decodeRecord(as: Poke.self, decoder: PostgrestClient.Configuration.jsonDecoder) {
+                do {
+                    let poke = try update.decodeRecord(as: Poke.self, decoder: PostgrestClient.Configuration.jsonDecoder)
+                    self?.log.info("Poke \(poke.id, privacy: .public) updated: delivered \(poke.deliveredAt != nil, privacy: .public), seen \(poke.seenAt != nil, privacy: .public)")
                     self?.updateInHistory(poke)
+                } catch {
+                    self?.log.error("Couldn't read a poke update from Realtime: \(String(describing: error), privacy: .public)")
                 }
             }
         })
