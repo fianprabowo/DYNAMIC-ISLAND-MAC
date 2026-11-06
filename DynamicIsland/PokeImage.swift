@@ -57,6 +57,24 @@ nonisolated enum PokeImage {
         throw Problem.tooBig
     }
 
+    /// A small copy to show in the chat: drawing the full picture there, scaled down on every frame
+    /// of the notch opening, makes it stutter.
+    static func thumbnail(from data: Data, maxPixels: Int = 360) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// The thumbnail at half its pixels in points, sharp on a Retina screen.
+    @MainActor static func image(_ thumbnail: CGImage) -> NSImage {
+        NSImage(cgImage: thumbnail, size: NSSize(width: thumbnail.width / 2, height: thumbnail.height / 2))
+    }
+
     private static func encode(_ image: CGImage, quality: Double) -> Data? {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }

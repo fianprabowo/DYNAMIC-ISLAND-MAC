@@ -48,10 +48,15 @@ class IslandLayout: ObservableObject {
     @Published var pokeEffects: Bool {
         didSet { UserDefaults.standard.set(pokeEffects, forKey: Self.pokeEffectsKey) }
     }
-    /// A springier, jelly-like opening, and a little squish when a notification comes in.
-    @Published var bouncyOpen: Bool {
-        didSet { UserDefaults.standard.set(bouncyOpen, forKey: Self.bouncyOpenKey) }
+    /// The open notch wider and taller than usual, for more room (the arrows beside the pin).
+    @Published private(set) var isWide: Bool {
+        didSet { UserDefaults.standard.set(isWide, forKey: Self.wideKey) }
     }
+    /// The tab's content fades out while the open notch changes size, so it isn't seen squeezing.
+    @Published private(set) var isResizing = false
+    /// After the notch narrows, the pointer (on the arrows) is left beside it: it stays open until
+    /// the pointer comes back, or a click elsewhere.
+    var holdsOpenForPointer = false
     @Published var isExpanded = false
     /// Pinned open: the open notch doesn't close when the pointer leaves it or on a click elsewhere.
     @Published var staysOpen = false
@@ -70,7 +75,7 @@ class IslandLayout: ObservableObject {
     @Published private(set) var panelStyle = PanelStyle.regular
 
     enum PanelStyle {
-        /// 640×180.
+        /// 640×180, or 900×280 when wide.
         case regular
         /// Taller for a YouTube video; below the tab bar it narrows to the video.
         case video
@@ -82,6 +87,8 @@ class IslandLayout: ObservableObject {
     static let notchHUDWing: CGFloat = 76
     static let notchExpandedWidth: CGFloat = 640
     static let notchExpandedHeight: CGFloat = 180
+    static let notchWideWidth: CGFloat = 900
+    static let notchWideHeight: CGFloat = 280
     /// Room around the open panel's content, below the tab bar.
     static let expandedHorizontalPadding: CGFloat = 20
     static let expandedTopPadding: CGFloat = 6
@@ -94,16 +101,14 @@ class IslandLayout: ObservableObject {
     static var videoBodyWidth: CGFloat {
         (videoHeight * 16 / 9).rounded(.up) + videoBodyMargin * 2
     }
-    /// Opening overshoots slightly, like the iPhone's Dynamic Island; closing settles smoothly.
-    static let expandAnimation = Animation.spring(response: 0.42, dampingFraction: 0.72)
-    /// The bouncy opening: it overshoots further and wobbles before it settles.
-    static let bouncyAnimation = Animation.spring(response: 0.5, dampingFraction: 0.6)
+    /// Opening and closing glide without overshoot.
+    static let expandAnimation = Animation.spring(response: 0.4, dampingFraction: 1)
 
-    /// How the island grows, as set in Animations.
+    /// How the island grows.
     var growAnimation: Animation {
-        bouncyOpen ? Self.bouncyAnimation : Self.expandAnimation
+        Self.expandAnimation
     }
-    static let collapseAnimation = Animation.spring(response: 0.36, dampingFraction: 0.9)
+    static let collapseAnimation = Animation.spring(response: 0.32, dampingFraction: 1)
 
     /// Set by the notch window: enlarges it to the given size before a growing animation starts,
     /// so the first animated frame still has the old size instead of jumping to the new one.
@@ -113,14 +118,14 @@ class IslandLayout: ObservableObject {
     private static let openOnHoverKey = "islandOpenOnHover"
     private static let showsEyesKey = "islandShowsEyes"
     private static let pokeEffectsKey = "islandPokeEffects"
-    private static let bouncyOpenKey = "islandBouncyOpen"
+    private static let wideKey = "islandWide"
 
     init() {
         isPinnedToNotch = UserDefaults.standard.object(forKey: Self.pinnedKey) as? Bool ?? true
         openOnHover = UserDefaults.standard.object(forKey: Self.openOnHoverKey) as? Bool ?? true
         showsEyes = UserDefaults.standard.object(forKey: Self.showsEyesKey) as? Bool ?? true
         pokeEffects = UserDefaults.standard.object(forKey: Self.pokeEffectsKey) as? Bool ?? true
-        bouncyOpen = UserDefaults.standard.object(forKey: Self.bouncyOpenKey) as? Bool ?? true
+        isWide = UserDefaults.standard.bool(forKey: Self.wideKey)
         notchSize = Self.measureNotch()
     }
 
@@ -128,8 +133,7 @@ class IslandLayout: ObservableObject {
         CGSize(width: notchSize.width + (showsWings ? Self.notchWing * 2 : 0), height: notchSize.height)
     }
 
-    /// Transparent room around the open island so the opening spring's overshoot isn't clipped,
-    /// the bouncy one's and a poke's shake included.
+    /// Transparent room around the open island so a poke's shake isn't clipped.
     static let overshootMargin: CGFloat = 24
 
     var notchBannerSize: CGSize {
@@ -145,12 +149,16 @@ class IslandLayout: ObservableObject {
     }
 
     /// The usual width and tab bar, with room below for the video.
-    private func size(of style: PanelStyle) -> CGSize {
+    private func size(of style: PanelStyle, wide: Bool? = nil) -> CGSize {
+        let wide = wide ?? isWide
+        // Never wider than the screen, leaving some of it on each side.
+        let screenWidth = Self.notchScreen?.frame.width ?? .greatestFiniteMagnitude
+        let width = wide ? min(Self.notchWideWidth, screenWidth - 160) : Self.notchExpandedWidth
         switch style {
         case .regular:
-            return CGSize(width: Self.notchExpandedWidth, height: Self.notchExpandedHeight)
+            return CGSize(width: width, height: wide ? Self.notchWideHeight : Self.notchExpandedHeight)
         case .video:
-            return CGSize(width: Self.notchExpandedWidth,
+            return CGSize(width: width,
                           height: notchSize.height + Self.expandedTopPadding + Self.videoHeight + Self.expandedBottomPadding)
         }
     }
@@ -175,7 +183,7 @@ class IslandLayout: ObservableObject {
 
     /// The largest the open island gets, for the island view's fixed size inside the window.
     var notchLargestWindowSize: CGSize {
-        let sizes = [PanelStyle.regular, .video].map(size(of:))
+        let sizes = [PanelStyle.regular, .video].flatMap { [size(of: $0, wide: false), size(of: $0, wide: true)] }
         return Self.windowSize(for: CGSize(width: sizes.map(\.width).max() ?? 0, height: sizes.map(\.height).max() ?? 0))
     }
 
@@ -193,6 +201,7 @@ class IslandLayout: ObservableObject {
 
     func expand() {
         guard !isExpanded else { return }
+        AnimationMonitor.shared.begin("open \(selectedTab) \(isWide ? "wide" : "normal")")
         grow(to: notchExpandedWindowSize) {
             self.isExpanded = true
         }
@@ -200,6 +209,7 @@ class IslandLayout: ObservableObject {
 
     func setPanelStyle(_ style: PanelStyle) {
         guard style != panelStyle else { return }
+        AnimationMonitor.shared.mark("panel style \(style)")
         let size = size(of: style)
         if size.height >= notchExpandedSize.height {
             grow(to: Self.windowSize(for: size)) {
@@ -208,6 +218,44 @@ class IslandLayout: ObservableObject {
         } else {
             withAnimation(Self.collapseAnimation) {
                 panelStyle = style
+            }
+        }
+    }
+
+    /// Changing size, without bounce: the content fades out, the black shape grows or shrinks,
+    /// and the content fades back in at the new size.
+    static let resizeAnimation = Animation.spring(response: 0.35, dampingFraction: 1)
+
+    func setWide(_ wide: Bool) {
+        guard wide != isWide, !isResizing else { return }
+        guard isExpanded else {
+            isWide = wide
+            return
+        }
+        let size = size(of: panelStyle, wide: wide)
+        AnimationMonitor.shared.begin("\(wide ? "widen" : "narrow") \(selectedTab)", duration: 1.2)
+        if !wide {
+            holdsOpenForPointer = true
+        }
+        withAnimation(.easeOut(duration: 0.1)) {
+            isResizing = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            if wide {
+                // The window grows first, so the shape has room from the first frame.
+                self.prepareToGrow?(Self.windowSize(for: size))
+            }
+            DispatchQueue.main.async {
+                AnimationMonitor.shared.mark("resize starts")
+                withAnimation(Self.resizeAnimation) {
+                    self.isWide = wide
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
+                    AnimationMonitor.shared.mark("content fades in")
+                    withAnimation(.easeIn(duration: 0.15)) {
+                        self.isResizing = false
+                    }
+                }
             }
         }
     }
@@ -223,6 +271,8 @@ class IslandLayout: ObservableObject {
     func collapse() {
         guard isExpanded else { return }
         staysOpen = false
+        holdsOpenForPointer = false
+        AnimationMonitor.shared.begin("close \(selectedTab) \(isWide ? "wide" : "normal")")
         withAnimation(Self.collapseAnimation) {
             isExpanded = false
         }
@@ -275,6 +325,7 @@ class IslandLayout: ObservableObject {
         }
         prepareToGrow(size)
         DispatchQueue.main.async {
+            AnimationMonitor.shared.mark("grow starts")
             withAnimation(self.growAnimation, change)
         }
     }
@@ -368,6 +419,10 @@ class FloatingPanel: NSPanel {
             // @Published emits before the stored value changes, so read the new state on the next pass.
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
             .store(in: &cancellables)
+        layout.$isWide
+            .dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
+            .store(in: &cancellables)
         layout.$panelStyle
             .dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.notchStateChanged() } }
@@ -430,6 +485,7 @@ class FloatingPanel: NSPanel {
 
     private func pointerEntered() {
         hoverCloseWorkItem?.cancel()
+        layout.holdsOpenForPointer = false
         // Pointing at a notification banner (to read it) shouldn't cover it with the open panel.
         guard layout.isPinnedToNotch, layout.openOnHover, !layout.isExpanded, !layout.showsBanner else { return }
 
@@ -444,7 +500,7 @@ class FloatingPanel: NSPanel {
 
     private func pointerExited() {
         hoverOpenWorkItem?.cancel()
-        guard layout.isPinnedToNotch, layout.openOnHover, layout.isExpanded, !layout.staysOpen else { return }
+        guard layout.isPinnedToNotch, layout.openOnHover, layout.isExpanded, !layout.staysOpen, !layout.holdsOpenForPointer else { return }
         scheduleHoverClose()
     }
 
@@ -535,7 +591,9 @@ class FloatingPanel: NSPanel {
         guard let screen = IslandLayout.notchScreen else { return }
         let rect = NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height)
         if rect != frame {
+            let started = CACurrentMediaTime()
             setFrame(rect, display: true)
+            AnimationMonitor.shared.mark("window \(Int(size.width))×\(Int(size.height)) took \(Int((CACurrentMediaTime() - started) * 1000)) ms")
         }
     }
 

@@ -18,8 +18,6 @@ struct NotchIslandView: View {
     @EnvironmentObject var vpnManager: VPNManager
     /// Shakes of the island for friends' pokes; each poke adds one.
     @State private var pokeShakes: CGFloat = 0
-    /// A notification came in: the island squishes for a moment.
-    @State private var isSquished = false
 
     var body: some View {
         // The island is an overlay on a flexible clear base, so its size never becomes the hosting
@@ -30,7 +28,6 @@ struct NotchIslandView: View {
             .overlay(alignment: .top) {
                 island
                     .modifier(ShakeEffect(shakes: pokeShakes))
-                    .scaleEffect(x: isSquished ? 0.93 : 1, y: 1, anchor: .top)
             }
             // The eyes live in the wings, so with them on the wings stay out.
             .onChange(of: hasActivity || layout.showsEyes, initial: true) { _, show in
@@ -52,11 +49,6 @@ struct NotchIslandView: View {
                 if layout.showsEyes && count > previous {
                     FaceMood.shared.lookAtBadge()
                 }
-                guard layout.bouncyOpen, count > previous, !layout.isExpanded, !layout.showsBanner else { return }
-                withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) { isSquished = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.35)) { isSquished = false }
-                }
             }
             // Initial too: after floating mode the level may have gone while this view was away.
             .onChange(of: showsHUD, initial: true) { _, shows in
@@ -76,13 +68,17 @@ struct NotchIslandView: View {
 
         return ZStack(alignment: .top) {
             if layout.isExpanded {
+                // Laid out once at the open size; while the island grows, its shape uncovers the
+                // content instead of the content being laid out again for every frame.
                 NotchExpandedView()
+                    .frame(width: layout.notchExpandedSize.width, height: layout.notchExpandedSize.height, alignment: .top)
                     .transition(.asymmetric(
-                        // Content fades in just after the black shape starts growing out of the notch.
-                        insertion: .opacity.combined(with: .scale(scale: 0.8, anchor: .top))
-                            .animation(IslandLayout.expandAnimation.delay(0.08)),
-                        removal: .opacity.combined(with: .scale(scale: 0.9, anchor: .top))
-                            .animation(.easeOut(duration: 0.15))
+                        // Content drops in from the notch and fades in just after the black shape
+                        // starts growing; closing, it fades out rising back into the notch.
+                        insertion: .opacity.combined(with: .offset(y: -10))
+                            .animation(.easeOut(duration: 0.28).delay(0.06)),
+                        removal: .opacity.combined(with: .offset(y: -6))
+                            .animation(.easeIn(duration: 0.12))
                     ))
             } else if layout.showsHUD, let level = hud.level {
                 NotchHUDView(level: level)
@@ -675,6 +671,7 @@ private struct NotchExpandedView: View {
     @EnvironmentObject var notificationManager: NotificationManager
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("NotchExpandedView")
         VStack(spacing: 0) {
             topBar
                 .frame(height: layout.notchSize.height)
@@ -701,6 +698,7 @@ private struct NotchExpandedView: View {
             .padding(.top, IslandLayout.expandedTopPadding)
             .padding(.bottom, IslandLayout.expandedBottomPadding)
             .frame(maxHeight: .infinity)
+            .opacity(layout.isResizing ? 0 : 1)
         }
         .overlay(alignment: .bottom) {
             ZStack { bannerToast }
@@ -742,6 +740,7 @@ private struct NotchExpandedView: View {
 
             HStack(spacing: 12) {
                 ForEach(NotchTab.allCases.filter(\.isBesideSettings), id: \.self, content: tabButton)
+                WideButton()
                 PinButton()
                 SettingsMenu()
             }
@@ -1579,6 +1578,24 @@ private struct AlertRow: View {
 }
 
 // MARK: - Settings
+/// Makes the open notch wider and taller, and back.
+private struct WideButton: View {
+    @EnvironmentObject var layout: IslandLayout
+    @EnvironmentObject var themeManager: ThemeManager
+
+    var body: some View {
+        Button(action: { layout.setWide(!layout.isWide) }) {
+            Image(systemName: layout.isWide ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(layout.isWide ? Color(themeManager.currentTheme.accentColor) : .gray)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(layout.isWide ? "Normal Size" : "Wider")
+    }
+}
+
 /// Keeps the notch open while the pointer is elsewhere, until unpinned or closed.
 private struct PinButton: View {
     @EnvironmentObject var layout: IslandLayout
@@ -1613,7 +1630,6 @@ private struct SettingsMenu: View {
             Menu("Animations") {
                 Toggle("Eyes Beside the Notch", isOn: $layout.showsEyes)
                 Toggle("Poke Effects", isOn: $layout.pokeEffects)
-                Toggle("Bouncy Opening", isOn: $layout.bouncyOpen)
             }
             soundMenu(.poke, selection: $pokeSound)
             soundMenu(.todo, selection: $todoSound)
@@ -2699,6 +2715,7 @@ private struct NookView: View {
     @State private var isCallExpanded = false
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("NookView")
         Group {
             if let meeting = meet.meeting, meeting.isInCall, isCallExpanded {
                 MeetCallView(meeting: meeting, eventTitle: eventTitle(for: meeting)) {
@@ -3587,6 +3604,7 @@ private struct PokeView: View {
     @EnvironmentObject var notificationManager: NotificationManager
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("PokeView")
         Group {
             switch poke.state {
             case .notConfigured:
@@ -3613,7 +3631,12 @@ private struct PokeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onAppear(perform: poke.refreshFriends)
+        // Checking for new friends waits until the notch has opened.
+        .task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            poke.refreshFriends()
+        }
         // Pokes are read here, in the chats, so they leave Alerts while this tab is open; a poke
         // arriving meanwhile still shows its banner.
         .onChange(of: notificationManager.notifications.count, initial: true) {
@@ -3687,6 +3710,7 @@ private struct PokeFriendsView: View {
     @State private var message = ""
     /// A picture to send with the message, already made small enough (see `PokeImage`).
     @State private var attachment: Data?
+    @State private var attachmentThumbnail: NSImage?
     @State private var isDropTargeted = false
     @State private var copied = false
     /// The friend code stays hidden until the eye is clicked, like on a shared screen.
@@ -3739,6 +3763,7 @@ private struct PokeFriendsView: View {
     }
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("PokeFriendsView")
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 if let profile = poke.profile {
@@ -3826,7 +3851,7 @@ private struct PokeFriendsView: View {
                 }
 
                 if let attachment {
-                    PokeAttachment(data: attachment) { self.attachment = nil }
+                    PokeAttachment(data: attachment, thumbnail: attachmentThumbnail) { self.attachment = nil }
                 }
 
                 composer
@@ -3861,6 +3886,12 @@ private struct PokeFriendsView: View {
         .onDisappear { poke.isPokeTabVisible = false }
         .task(id: selectedFriend?.id) {
             if let id = selectedFriend?.id {
+                // A chat already here shows at once; checking for changes waits until the notch
+                // has opened, so a change doesn't redraw the chat while it grows.
+                if poke.history[id] != nil {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    guard !Task.isCancelled else { return }
+                }
                 await poke.loadHistory(with: id)
             }
         }
@@ -3975,7 +4006,9 @@ private struct PokeFriendsView: View {
     private func prepare(_ make: @escaping @Sendable () throws -> Data) {
         Task {
             do {
-                attachment = try await Task.detached(operation: make).value
+                let data = try await Task.detached(operation: make).value
+                attachmentThumbnail = await Task.detached { PokeImage.thumbnail(from: data, maxPixels: 120) }.value.map(PokeImage.image)
+                attachment = data
                 poke.actionError = nil
             } catch {
                 poke.actionError = error.localizedDescription
@@ -4058,6 +4091,7 @@ private struct PokeChat: View {
     let friend: PokeService.Friend
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("PokeChat")
         let pokes = poke.history[friend.id] ?? []
         VStack(alignment: .leading, spacing: 4) {
             header(isEmpty: pokes.isEmpty)
@@ -4117,7 +4151,7 @@ private struct PokeChat: View {
             let onlyPicture = item.imagePath != nil && item.message.isEmpty
             VStack(alignment: onlyPicture ? .trailing : .leading, spacing: 4) {
                 if let path = item.imagePath {
-                    PokeChatImage(path: path)
+                    PokeChatImage(path: path, cached: poke.cachedThumbnail(at: path))
                 }
                 HStack(alignment: .lastTextBaseline, spacing: 6) {
                     if !onlyPicture {
@@ -4168,10 +4202,17 @@ private struct PokeChat: View {
 private struct PokeChatImage: View {
     @EnvironmentObject var poke: PokeService
     let path: String
+    /// Shown at once when the notch opens again, so the chat doesn't jump while it grows.
     @State private var image: NSImage?
     @State private var failed = false
 
+    init(path: String, cached: NSImage?) {
+        self.path = path
+        _image = State(initialValue: cached)
+    }
+
     var body: some View {
+        let _ = AnimationMonitor.shared.body("PokeChatImage")
         Group {
             if let image {
                 Button { poke.openImage(at: path) } label: {
@@ -4195,7 +4236,8 @@ private struct PokeChatImage: View {
             }
         }
         .task(id: path) {
-            if let data = await poke.image(at: path), let image = NSImage(data: data) {
+            guard image == nil else { return }
+            if let image = await poke.thumbnail(at: path) {
                 self.image = image
             } else {
                 failed = true
@@ -4207,19 +4249,14 @@ private struct PokeChatImage: View {
 /// The picture waiting to be sent, above the message field, with a button that takes it off.
 private struct PokeAttachment: View {
     let data: Data
+    /// A small copy, made once: the full picture would be decoded again with every key typed.
+    let thumbnail: NSImage?
     let onRemove: () -> Void
-    private let image: NSImage?
-
-    init(data: Data, onRemove: @escaping () -> Void) {
-        self.data = data
-        self.onRemove = onRemove
-        image = NSImage(data: data)
-    }
 
     var body: some View {
         HStack(spacing: 8) {
-            if let image {
-                Image(nsImage: image)
+            if let thumbnail {
+                Image(nsImage: thumbnail)
                     .resizable()
                     .scaledToFill()
                     .frame(width: 34, height: 34)
@@ -4319,6 +4356,7 @@ private struct MarqueeText: View {
     private let pause = 1.5
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("MarqueeText")
         // As wide as the text when it fits, otherwise as wide as there's room for.
         Text(text).font(font).lineLimit(1).hidden()
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { boxWidth = $0 }
@@ -4364,6 +4402,7 @@ private struct FriendRow: View {
     @State private var isHovered = false
 
     var body: some View {
+        let _ = AnimationMonitor.shared.body("FriendRow")
         let isOnline = poke.isOnline(friend)
         HStack(spacing: 6) {
             Circle()

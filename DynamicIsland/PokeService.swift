@@ -36,7 +36,7 @@ class PokeService: ObservableObject {
         let name: String
     }
 
-    nonisolated struct Poke: Identifiable, Decodable, Sendable {
+    nonisolated struct Poke: Identifiable, Decodable, Equatable, Sendable {
         let id: Int
         let senderID: UUID
         let recipientID: UUID?
@@ -411,7 +411,11 @@ class PokeService: ObservableObject {
 
     private func loadFriends() async throws {
         guard let client else { return }
-        friends = try await client.rpc("list_friends").execute().value
+        let friends: [Friend] = try await client.rpc("list_friends").execute().value
+        // The same list again isn't drawn again (that would stutter the notch opening).
+        if friends != self.friends {
+            self.friends = friends
+        }
     }
 
     func isOnline(_ friend: Friend) -> Bool {
@@ -470,7 +474,12 @@ class PokeService: ObservableObject {
                 query = query.gt("id", value: cleared)
             }
             let pokes: [Poke] = try await query.order("id", ascending: false).limit(Self.historyLimit).execute().value
-            history[friendID] = pokes
+            // The same chat again isn't drawn again (that would stutter the notch opening).
+            let changed = history[friendID] != pokes
+            AnimationMonitor.shared.mark("chat loaded, \(changed ? "changed" : "unchanged")")
+            if changed {
+                history[friendID] = pokes
+            }
         } catch {
             log.error("Loading the chat failed: \(String(describing: error), privacy: .public)")
         }
@@ -549,6 +558,23 @@ class PokeService: ObservableObject {
     static let imageBucket = "poke-images"
     /// Pictures in chats, by path, once downloaded or sent from here.
     private var images: [String: Data] = [:]
+
+    /// Small copies of chat pictures, made once, so the chat shows them right away when it opens.
+    private var thumbnails: [String: NSImage] = [:]
+
+    func cachedThumbnail(at path: String) -> NSImage? {
+        thumbnails[path]
+    }
+
+    /// A chat picture's small copy, downloaded and made the first time.
+    func thumbnail(at path: String) async -> NSImage? {
+        if let thumbnail = thumbnails[path] { return thumbnail }
+        guard let data = await image(at: path),
+              let cgImage = await Task.detached(operation: { PokeImage.thumbnail(from: data) }).value else { return nil }
+        let thumbnail = PokeImage.image(cgImage)
+        thumbnails[path] = thumbnail
+        return thumbnail
+    }
 
     /// A chat's picture, downloaded the first time.
     func image(at path: String) async -> Data? {
