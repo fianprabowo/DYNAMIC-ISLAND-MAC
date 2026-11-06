@@ -397,6 +397,11 @@ private struct NotchBannerView: View {
         notification.pokeSenderName ?? "them"
     }
 
+    /// The open Poke tab already shows a sent poke in the chat, so it needs no "Poked jho" banner.
+    private var showsPokeTab: Bool {
+        isInPanel && layout.selectedTab == .poke
+    }
+
     /// A poke opens the Poke tab, on the chat with whoever sent it; anything else opens.
     private func open() {
         if notification.type == .poke {
@@ -414,7 +419,7 @@ private struct NotchBannerView: View {
 
     private func performAction() {
         if let friendID = notification.pokeSenderID {
-            PokeService.shared.poke(friendID, name: senderName, confirmOnNotch: true)
+            PokeService.shared.poke(friendID, name: senderName, confirmOnNotch: !showsPokeTab)
         } else {
             notification.open()
         }
@@ -433,7 +438,7 @@ private struct NotchBannerView: View {
 
     private func sendReply() {
         guard let friendID = notification.pokeSenderID else { return }
-        PokeService.shared.poke(friendID, name: senderName, message: reply, confirmOnNotch: true)
+        PokeService.shared.poke(friendID, name: senderName, message: reply, confirmOnNotch: !showsPokeTab)
         notificationManager.dismissBanner()
     }
 
