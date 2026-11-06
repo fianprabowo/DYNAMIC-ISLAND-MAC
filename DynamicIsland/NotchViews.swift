@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// The island attached to the MacBook notch, modeled after NotchNook: notch-sized while idle,
 /// growing wings for live activity, dropping down with other apps' notifications, and opening
@@ -3681,8 +3682,12 @@ private struct PokeNameView: View {
 /// friend picked on the left, sent with Enter.
 private struct PokeFriendsView: View {
     @EnvironmentObject var poke: PokeService
+    @EnvironmentObject var layout: IslandLayout
     @State private var friendCode = ""
     @State private var message = ""
+    /// A picture to send with the message, already made small enough (see `PokeImage`).
+    @State private var attachment: Data?
+    @State private var isDropTargeted = false
     @State private var copied = false
     /// The friend code stays hidden until the eye is clicked, like on a shared screen.
     @State private var showsCode = false
@@ -3820,6 +3825,10 @@ private struct PokeFriendsView: View {
                     PokeError(message: error)
                 }
 
+                if let attachment {
+                    PokeAttachment(data: attachment) { self.attachment = nil }
+                }
+
                 composer
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { messageRowHeight = $0 }
                     // The emoji popup opens up from the field, over the chat.
@@ -3833,8 +3842,20 @@ private struct PokeFriendsView: View {
                     .animation(.easeOut(duration: 0.12), value: showsEmoji)
                     .zIndex(1)
             }
+            // A picture dragged in from Finder or a browser is attached to the message.
+            .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted, perform: attach)
+            .overlay {
+                if isDropTargeted && selectedFriend != nil {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(pokeColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        .allowsHitTesting(false)
+                }
+            }
         }
-        .onChange(of: selectedFriend?.id) { showsEmoji = false }
+        .onChange(of: selectedFriend?.id) {
+            showsEmoji = false
+            attachment = nil
+        }
         // A poke coming in while this is on screen just shows up in the chat, without a banner.
         .onAppear { poke.isPokeTabVisible = true }
         .onDisappear { poke.isPokeTabVisible = false }
@@ -3856,6 +3877,16 @@ private struct PokeFriendsView: View {
                     .onSubmit(send)
                     .onExitCommand { showsEmoji = false }
 
+                Button(action: pickImage) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 12))
+                        .foregroundColor(attachment == nil ? .gray : .white)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help("Attach a picture")
+
                 Button { showsEmoji.toggle() } label: {
                     Image(systemName: "face.smiling")
                         .font(.system(size: 13))
@@ -3873,7 +3904,7 @@ private struct PokeFriendsView: View {
 
             // A round send button, like WhatsApp's; with nothing typed it sends a plain poke, and
             // shows the poking hand instead.
-            let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let hasMessage = !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil
             Button(action: send) {
                 Image(systemName: hasMessage ? "paperplane.fill" : "hand.point.right.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -3899,9 +3930,58 @@ private struct PokeFriendsView: View {
 
     private func send() {
         guard let friend = selectedFriend else { return }
-        poke.poke(friend.id, name: friend.name, message: message)
+        poke.poke(friend.id, name: friend.name, message: message, image: attachment)
         message = ""
+        attachment = nil
         showsEmoji = false
+    }
+
+    /// Picks a picture in an Open panel. The notch stays open meanwhile, though it loses the focus.
+    private func pickImage() {
+        guard selectedFriend != nil else { return }
+        showsEmoji = false
+        let staysOpen = layout.staysOpen
+        layout.staysOpen = true
+        defer { layout.staysOpen = staysOpen }
+        let panel = NSOpenPanel()
+        panel.title = "Attach a Picture"
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        NSApp.activate()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        prepare { try PokeImage.jpeg(from: url) }
+    }
+
+    private func attach(_ providers: [NSItemProvider]) -> Bool {
+        guard selectedFriend != nil, let provider = providers.first else { return false }
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.isFileURL else { return }
+                Task { @MainActor in prepare { try PokeImage.jpeg(from: url) } }
+            }
+            return true
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                guard let data else { return }
+                Task { @MainActor in prepare { try PokeImage.jpeg(from: data) } }
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Makes the picture small enough off the main thread, then attaches it.
+    private func prepare(_ make: @escaping @Sendable () throws -> Data) {
+        Task {
+            do {
+                attachment = try await Task.detached(operation: make).value
+                poke.actionError = nil
+            } catch {
+                poke.actionError = error.localizedDescription
+            }
+            isMessageFocused = true
+        }
     }
 
     /// Adds the emoji at the end of the message, if it still fits, and goes back to typing.
@@ -4033,17 +4113,26 @@ private struct PokeChat: View {
             if isMine {
                 Spacer(minLength: 40)
             }
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
-                message(item, isMine: isMine)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 2) {
-                    if let date = item.createdAt {
-                        Text(Self.time(date))
-                            .font(.system(size: 8))
-                            .foregroundColor(.white.opacity(0.5))
+            // A picture without a message has the time under it, on the right.
+            let onlyPicture = item.imagePath != nil && item.message.isEmpty
+            VStack(alignment: onlyPicture ? .trailing : .leading, spacing: 4) {
+                if let path = item.imagePath {
+                    PokeChatImage(path: path)
+                }
+                HStack(alignment: .lastTextBaseline, spacing: 6) {
+                    if !onlyPicture {
+                        message(item, isMine: isMine)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    if isMine {
-                        PokeTicks(poke: item, friendName: friend.name)
+                    HStack(spacing: 2) {
+                        if let date = item.createdAt {
+                            Text(Self.time(date))
+                                .font(.system(size: 8))
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                        if isMine {
+                            PokeTicks(poke: item, friendName: friend.name)
+                        }
                     }
                 }
             }
@@ -4072,6 +4161,85 @@ private struct PokeChat: View {
         Calendar.current.isDateInToday(date)
             ? date.formatted(date: .omitted, time: .shortened)
             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+    }
+}
+
+/// A picture in the chat, downloaded when it first shows; clicked, it opens in Preview.
+private struct PokeChatImage: View {
+    @EnvironmentObject var poke: PokeService
+    let path: String
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Button { poke.openImage(at: path) } label: {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 170, maxHeight: 130)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help("Open in Preview")
+            } else if failed {
+                Label("Picture no longer available", systemImage: "photo")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 120, height: 80)
+            }
+        }
+        .task(id: path) {
+            if let data = await poke.image(at: path), let image = NSImage(data: data) {
+                self.image = image
+            } else {
+                failed = true
+            }
+        }
+    }
+}
+
+/// The picture waiting to be sent, above the message field, with a button that takes it off.
+private struct PokeAttachment: View {
+    let data: Data
+    let onRemove: () -> Void
+    private let image: NSImage?
+
+    init(data: Data, onRemove: @escaping () -> Void) {
+        self.data = data
+        self.onRemove = onRemove
+        image = NSImage(data: data)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 34, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            Text("Picture, \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))")
+                .font(.system(size: 10))
+                .foregroundColor(.gray)
+            Spacer(minLength: 0)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Remove the picture")
+        }
+        .padding(.horizontal, 4)
     }
 }
 

@@ -32,6 +32,8 @@ create table if not exists public.pokes (
 -- two grey ticks, then two green ones.
 alter table public.pokes add column if not exists delivered_at timestamptz;
 alter table public.pokes add column if not exists seen_at timestamptz;
+-- A picture sent with the poke: a JPEG in the poke-images bucket, in the sender's folder.
+alter table public.pokes add column if not exists image_path text;
 create index if not exists pokes_recipient_id on public.pokes (recipient_id, id);
 create index if not exists pokes_sender_created on public.pokes (sender_id, created_at);
 
@@ -78,6 +80,10 @@ begin
   new.created_at := now();
   new.delivered_at := null;
   new.seen_at := null;
+  if new.image_path is not null
+     and new.image_path !~ ('^' || new.sender_id::text || '/[0-9a-f-]{36}\.jpg$') then
+    raise exception 'Not your picture';
+  end if;
   delete from pokes where created_at < now() - interval '7 days';
   return new;
 end $$;
@@ -175,3 +181,69 @@ begin
   alter publication supabase_realtime add table public.pokes;
 exception when duplicate_object then null;
 end $$;
+
+-- Pictures sent in a chat: JPEGs of at most 5 MB in a private bucket, in a folder per sender.
+-- Each person sends at most 50 a day, and the sender's app deletes its own older than a day. All of
+-- them together stay under 50 MB: when a new one would pass 48 MB, the sender's app first deletes
+-- them all.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('poke-images', 'poke-images', false, 5242880, array['image/jpeg'])
+on conflict (id) do update
+  set public = false, file_size_limit = 5242880, allowed_mime_types = array['image/jpeg'];
+
+-- How many pictures the signed-in user sent in the last day. It runs as them, so it counts what
+-- "See poke images" lets them see: their own folder.
+create or replace function public.poke_images_today() returns bigint
+language sql stable security invoker set search_path = public, storage as $$
+  select count(*) from storage.objects
+  where bucket_id = 'poke-images' and (storage.foldername(name))[1] = auth.uid()::text
+    and created_at > now() - interval '1 day';
+$$;
+revoke execute on function public.poke_images_today from public, anon;
+grant execute on function public.poke_images_today to authenticated;
+
+drop policy if exists "Send poke images" on storage.objects;
+create policy "Send poke images" on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'poke-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and public.poke_images_today() < 50
+  );
+
+-- The sender sees their own; the recipient sees one once the poke with it reached them.
+drop policy if exists "See poke images" on storage.objects;
+create policy "See poke images" on storage.objects
+  for select to authenticated using (
+    bucket_id = 'poke-images'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or exists (select 1 from public.pokes p where p.image_path = objects.name and p.recipient_id = auth.uid())
+    )
+  );
+
+-- How big all pictures are together, in bytes.
+create or replace function public.poke_images_bytes() returns bigint
+language sql stable security definer set search_path = public, storage as $$
+  select coalesce(sum((metadata->>'size')::bigint), 0) from storage.objects where bucket_id = 'poke-images';
+$$;
+
+-- Every picture, when one of `adding` bytes would bring them past 48 MB; otherwise none.
+create or replace function public.poke_images_to_clear(adding bigint) returns text[]
+language sql stable security definer set search_path = public, storage as $$
+  select coalesce(array_agg(name), '{}') from storage.objects
+  where bucket_id = 'poke-images' and public.poke_images_bytes() + adding > 48 * 1024 * 1024;
+$$;
+revoke execute on function public.poke_images_bytes, public.poke_images_to_clear from public, anon;
+grant execute on function public.poke_images_bytes, public.poke_images_to_clear to authenticated;
+
+-- Your own pictures, and everyone's once they're nearly 48 MB together (a picture is at most 5).
+drop policy if exists "Delete own poke images" on storage.objects;
+drop policy if exists "Delete poke images" on storage.objects;
+create policy "Delete poke images" on storage.objects
+  for delete to authenticated using (
+    bucket_id = 'poke-images'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or public.poke_images_bytes() > 43 * 1024 * 1024
+    )
+  );

@@ -48,6 +48,8 @@ class PokeService: ObservableObject {
         /// When the recipient opened the chat with it; nil until then (or before supabase/poke.sql
         /// added it).
         var seenAt: Date?
+        /// A picture sent with it, in the poke-images bucket.
+        let imagePath: String?
 
         enum CodingKeys: String, CodingKey {
             case id, message
@@ -57,6 +59,7 @@ class PokeService: ObservableObject {
             case createdAt = "created_at"
             case deliveredAt = "delivered_at"
             case seenAt = "seen_at"
+            case imagePath = "image_path"
         }
 
         init(from decoder: Decoder) throws {
@@ -69,6 +72,7 @@ class PokeService: ObservableObject {
             createdAt = Self.date(in: container, forKey: .createdAt)
             deliveredAt = Self.date(in: container, forKey: .deliveredAt)
             seenAt = Self.date(in: container, forKey: .seenAt)
+            imagePath = try container.decodeIfPresent(String.self, forKey: .imagePath)
         }
 
         /// Realtime and the REST API format times differently, like `2026-11-06T08:20:34.027432+00:00`
@@ -97,10 +101,13 @@ class PokeService: ObservableObject {
     private nonisolated struct NewPoke: Encodable, Sendable {
         let recipientID: UUID
         let message: String
+        /// Left out without a picture, so pokes work before supabase/poke.sql added the column.
+        let imagePath: String?
 
         enum CodingKeys: String, CodingKey {
             case recipientID = "recipient_id"
             case message
+            case imagePath = "image_path"
         }
     }
 
@@ -321,6 +328,7 @@ class PokeService: ObservableObject {
                     guard self.client === client else { return }
                     state = .ready
                     listen()
+                    deleteOldImages()
                 }
             } catch {
                 guard self.client === client else { return }
@@ -536,6 +544,73 @@ class PokeService: ObservableObject {
         }
     }
 
+    // MARK: Pictures
+
+    static let imageBucket = "poke-images"
+    /// Pictures in chats, by path, once downloaded or sent from here.
+    private var images: [String: Data] = [:]
+
+    /// A chat's picture, downloaded the first time.
+    func image(at path: String) async -> Data? {
+        if let image = images[path] { return image }
+        guard let client else { return nil }
+        do {
+            let data = try await client.storage.from(Self.imageBucket).download(path: path)
+            images[path] = data
+            return data
+        } catch {
+            log.error("Downloading a picture failed: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Keeps all pictures under 50 MB together: when this one would bring them past 48 MB, all of
+    /// them are deleted first, so older chats show "Picture no longer available".
+    private func makeRoom(for bytes: Int) async {
+        guard let client else { return }
+        do {
+            let paths: [String] = try await client.rpc("poke_images_to_clear", params: ["adding": bytes]).execute().value
+            guard !paths.isEmpty else { return }
+            try await client.storage.from(Self.imageBucket).remove(paths: paths)
+            log.info("Deleted all \(paths.count) pictures to stay under 48 MB")
+        } catch {
+            // Before supabase/poke.sql added it, nothing is deleted; the picture is sent anyway.
+            log.error("Making room for a picture failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Opens a chat's picture in Preview, from a copy in the temporary folder.
+    func openImage(at path: String) {
+        guard let data = images[path] else { return }
+        let url = FileManager.default.temporaryDirectory.appending(path: "Poke \((path as NSString).lastPathComponent)")
+        do {
+            try data.write(to: url, options: .atomic)
+            NSWorkspace.shared.open(url)
+        } catch {
+            log.error("Opening a picture failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Deletes pictures you sent more than a day ago; their pokes are gone by then.
+    private func deleteOldImages() {
+        guard let client, let userID = profile?.id else { return }
+        Task {
+            do {
+                let bucket = client.storage.from(Self.imageBucket)
+                let files = try await bucket.list(path: userID.uuidString.lowercased(), options: SearchOptions(limit: 100, sortBy: SortBy(column: "created_at", order: .ascending)))
+                let dayAgo = Date().addingTimeInterval(-24 * 60 * 60)
+                let old = files.filter { ($0.createdAt ?? .distantFuture) < dayAgo }.map { "\(userID.uuidString.lowercased())/\($0.name)" }
+                if !old.isEmpty {
+                    try await bucket.remove(paths: old)
+                    log.info("Deleted \(old.count) old pictures")
+                }
+            } catch {
+                // Before supabase/poke.sql added the bucket, there's nothing to delete.
+                log.error("Deleting old pictures failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
     func isFromMe(_ poke: Poke) -> Bool {
         poke.senderID == profile?.id
     }
@@ -544,8 +619,9 @@ class PokeService: ObservableObject {
 
     /// Pokes a friend. From a banner's Poke Back the notch confirms it once sent; the Poke tab marks
     /// the friend from the click until Supabase answers, and shows an error if it didn't go through.
-    func poke(_ friendID: UUID, name: String, message: String = "", confirmOnNotch: Bool = false) {
-        guard let client else { return }
+    /// With `image` (a JPEG from `PokeImage`), the picture is uploaded first.
+    func poke(_ friendID: UUID, name: String, message: String = "", image: Data? = nil, confirmOnNotch: Bool = false) {
+        guard let client, let userID = profile?.id else { return }
         let message = Self.limited(message.trimmingCharacters(in: .whitespacesAndNewlines), to: 100)
         // A newer poke to the same friend keeps the mark until its own answer.
         let sending = UUID()
@@ -561,7 +637,15 @@ class PokeService: ObservableObject {
                 }
             }
             do {
-                let sent: Poke = try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message), returning: .representation).select().single().execute().value
+                var imagePath: String?
+                if let image {
+                    await makeRoom(for: image.count)
+                    let path = "\(userID.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+                    try await client.storage.from(Self.imageBucket).upload(path, data: image, options: FileOptions(contentType: "image/jpeg"))
+                    images[path] = image
+                    imagePath = path
+                }
+                let sent: Poke = try await client.from("pokes").insert(NewPoke(recipientID: friendID, message: message, imagePath: imagePath), returning: .representation).select().single().execute().value
                 actionError = nil
                 addToHistory(sent, friendID: friendID)
                 if confirmOnNotch {
@@ -767,7 +851,7 @@ class PokeService: ObservableObject {
 
         let title = "\(poke.senderName) poked you"
         // A poke without a message shows only "… poked you".
-        let body = poke.message
+        let body = poke.imagePath == nil || !poke.message.isEmpty ? poke.message : "📷 Picture"
         if let createdAt = poke.createdAt, Date().timeIntervalSince(createdAt) > bannerMaxAge {
             notificationManager.post(.poke, title: title, body: body)
             return
@@ -783,6 +867,16 @@ class PokeService: ObservableObject {
 
     private static func describe(_ error: Error) -> String {
         if let error = error as? PostgrestError {
+            return error.message
+        }
+        if let error = error as? StorageError {
+            // Row level security turns down a picture past the day's 50.
+            if error.message.localizedCaseInsensitiveContains("row-level security") {
+                return "That's 50 pictures today; try again tomorrow"
+            }
+            if error.message.localizedCaseInsensitiveContains("bucket not found") {
+                return "Pictures need the latest supabase/poke.sql"
+            }
             return error.message
         }
         if let error = error as? AuthError {
