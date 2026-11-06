@@ -130,7 +130,7 @@ struct NotchIslandView: View {
           || calendarManager.upcomingMeeting != nil || vpnManager.isConnected || isInMeet)
     }
 
-    /// The face peeks out of the left wing while standing by, in place of the bell; anything
+    /// The face peeks out of the left wing while standing by; anything
     /// running takes its place.
     private var showsFace: Bool {
         layout.showsEyes && isStandingBy
@@ -175,16 +175,19 @@ struct NotchIslandView: View {
                     Image(systemName: meeting.joinURL == nil ? "calendar" : "video.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(Color(meeting.color))
-                } else if !spotifyManager.isPlaying && notificationManager.unreadCount == 0 && vpnManager.isConnected {
+                } else if spotifyManager.isPlaying {
+                    // Music without album art yet.
+                    Image(systemName: "music.note")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(themeManager.currentTheme.accentColor))
+                } else if layout.showsEyes && (notificationManager.unreadCount > 0 || !vpnManager.isConnected) {
+                    // Unread notifications, even with the VPN on: the face watches the badge.
+                    NotchEyes()
+                } else if vpnManager.isConnected {
                     Image(systemName: "lock.shield.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(vpnColor)
                         .help("VPN connected")
-                } else {
-                    // Music without album art yet, or only notifications.
-                    Image(systemName: spotifyManager.isPlaying ? "music.note" : "bell.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Color(themeManager.currentTheme.accentColor))
                 }
             }
             .frame(width: IslandLayout.notchWing)
@@ -3879,22 +3882,44 @@ private struct PokeEmojiPopup: View {
     }
 }
 
-/// The latest pokes between you and a friend, newest on top, like "jho: see you".
+/// The latest pokes between you and a friend, newest on top, like "jho: see you". Hovering shows
+/// a button that clears the chat on this Mac only.
 private struct PokeChat: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
+    @State private var isHovered = false
 
     var body: some View {
         let pokes = poke.history[friend.id] ?? []
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 3) {
-                ForEach(pokes) { item in
-                    row(item)
+        // The trash can has its own column on the right, so it never covers a poke's time.
+        HStack(alignment: .top, spacing: 6) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(pokes) { item in
+                        row(item)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .scrollIndicators(.never)
+
+            if !pokes.isEmpty {
+                Button {
+                    poke.clearChat(with: friend.id)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.gray)
+                        .frame(width: 14, height: 14)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .opacity(isHovered ? 1 : 0)
+                .animation(.easeInOut(duration: 0.12), value: isHovered)
+                .help("Clear this chat on your Mac; \(friend.name) still sees it")
+            }
         }
-        .scrollIndicators(.never)
         .overlay {
             if pokes.isEmpty {
                 Text("No pokes with \(friend.name) yet")
@@ -3902,6 +3927,7 @@ private struct PokeChat: View {
                     .foregroundColor(.gray)
             }
         }
+        .onHover { isHovered = $0 }
     }
 
     private func row(_ item: PokeService.Poke) -> some View {
@@ -3937,8 +3963,8 @@ private struct PokeChat: View {
     }
 }
 
-/// A friend's name, with a green dot while they're online; clicking picks them to poke. Hovering
-/// shows a button to remove them.
+/// A friend's name, with a green dot while they're online and a calendar while they're in a
+/// meeting; clicking picks them to poke. Hovering shows a button to remove them.
 private struct FriendRow: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
@@ -3958,6 +3984,13 @@ private struct FriendRow: View {
             Text(friend.name)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
+            if poke.isInMeeting(friend) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.orange)
+                    .help("\(friend.name) is in a meeting")
+                    .transition(.opacity)
+            }
             Spacer(minLength: 0)
             if isPoked {
                 Image(systemName: "hand.point.right.fill")

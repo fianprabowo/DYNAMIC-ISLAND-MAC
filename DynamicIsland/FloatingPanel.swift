@@ -486,8 +486,10 @@ class FloatingPanel: NSPanel {
     private func applyMode(pinnedToNotch: Bool) {
         level = pinnedToNotch ? NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3) : .floating
         hasShadow = !pinnedToNotch
-        // Dark appearance so system colors stay readable against the black notch.
+        // Dark appearance so system colors stay readable against the black notch. Menus (like
+        // Settings) follow the app's appearance, not the window's, so the app goes dark too.
         appearance = pinnedToNotch ? NSAppearance(named: .darkAqua) : nil
+        NSApp.appearance = appearance
         container.fixedContentSize = pinnedToNotch ? layout.notchLargestWindowSize : nil
 
         // @Published emits before the stored value changes, so update on the next run loop pass.

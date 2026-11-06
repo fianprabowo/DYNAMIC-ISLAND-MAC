@@ -93,15 +93,28 @@ class PokeService: ObservableObject {
     /// Everyone with Dynamic Island open and connected to Poke right now; empty while this Mac
     /// isn't connected, since then it can't tell.
     @Published private(set) var onlineUserIDs: Set<UUID> = []
-    /// Each connected app, by its presence key, and whose it is. One person can have several Macs.
-    private var presences: [String: UUID] = [:] {
+    /// Those of them whose app says they're in a meeting (on any of their Macs).
+    @Published private(set) var inMeetingUserIDs: Set<UUID> = []
+    /// Each connected app, by its presence key: whose it is, and whether they're in a meeting.
+    /// One person can have several Macs.
+    private var presences: [String: Presence] = [:] {
         didSet {
-            let online = Set(presences.values)
+            let online = Set(presences.values.map(\.userID))
             if online != onlineUserIDs {
                 onlineUserIDs = online
             }
+            let inMeeting = Set(presences.values.filter(\.isInMeeting).map(\.userID))
+            if inMeeting != inMeetingUserIDs {
+                inMeetingUserIDs = inMeeting
+            }
         }
     }
+    private struct Presence {
+        let userID: UUID
+        let isInMeeting: Bool
+    }
+    /// Whether this Mac's user is in a meeting now, told to friends through presence.
+    private var isInMeeting = false
 
     private(set) var projectURL: String {
         get { UserDefaults.standard.string(forKey: Self.urlKey) ?? "" }
@@ -136,6 +149,13 @@ class PokeService: ObservableObject {
     private var shownPokeIDs: Set<Int> = []
 
 
+    /// Per friend, the newest poke cleared from the chat on this Mac; the friend's chat keeps it.
+    private var chatClearedUpTo: [String: Int] {
+        get { UserDefaults.standard.dictionary(forKey: Self.chatClearedKey) as? [String: Int] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.chatClearedKey) }
+    }
+
+    private static let chatClearedKey = "pokeChatClearedUpTo"
     private static let urlKey = "pokeProjectURL"
     private static let keyKey = "pokeAnonKey"
     private static let lastPokeKey = "pokeLastID"
@@ -187,6 +207,7 @@ class PokeService: ObservableObject {
         profile = nil
         friends = []
         history = [:]
+        chatClearedUpTo = [:]
         actionError = nil
         state = .notConfigured
     }
@@ -314,16 +335,45 @@ class PokeService: ObservableObject {
         onlineUserIDs.contains(friend.id)
     }
 
+    func isInMeeting(_ friend: Friend) -> Bool {
+        inMeetingUserIDs.contains(friend.id)
+    }
+
+    /// Tells friends whether you're in a meeting: only yes or no, never which meeting.
+    func setInMeeting(_ value: Bool) {
+        guard value != isInMeeting else { return }
+        isInMeeting = value
+        guard let presenceChannel, presenceChannel.status == .subscribed, let userID = profile?.id else { return }
+        let state = presenceState(userID: userID)
+        Task { await presenceChannel.track(state: state) }
+    }
+
+    private func presenceState(userID: UUID) -> JSONObject {
+        ["user_id": .string(userID.uuidString.lowercased()), "in_meeting": .bool(isInMeeting)]
+    }
+
     /// Fetches the latest pokes you and a friend sent each other. Supabase keeps a week of pokes.
     func loadHistory(with friendID: UUID) async {
         guard state == .ready, let client, let userID = profile?.id else { return }
         do {
             let between = "and(sender_id.eq.\(userID),recipient_id.eq.\(friendID)),and(sender_id.eq.\(friendID),recipient_id.eq.\(userID))"
-            let pokes: [Poke] = try await client.from("pokes").select().or(between).order("id", ascending: false).limit(Self.historyLimit).execute().value
+            var query = client.from("pokes").select().or(between)
+            if let cleared = chatClearedUpTo[friendID.uuidString] {
+                query = query.gt("id", value: cleared)
+            }
+            let pokes: [Poke] = try await query.order("id", ascending: false).limit(Self.historyLimit).execute().value
             history[friendID] = pokes
         } catch {
             log.error("Loading the chat failed: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    /// Empties the chat with a friend on this Mac only: the pokes stay in Supabase, so the friend
+    /// still sees them, and newer ones show up as usual.
+    func clearChat(with friendID: UUID) {
+        guard let newest = history[friendID]?.first?.id else { return }
+        chatClearedUpTo[friendID.uuidString] = newest
+        history[friendID] = []
     }
 
     /// Puts a new poke at the top of an open chat, dropping the oldest past the limit.
@@ -428,8 +478,8 @@ class PokeService: ObservableObject {
     }
 
     /// Every connected app joins one shared Realtime channel and says whose it is (only the user
-    /// ID, which only friends can put a name to). An app that quits, sleeps or loses the network
-    /// leaves it, so a friend in it is online.
+    /// ID, which only friends can put a name to, and whether they're in a meeting). An app that
+    /// quits, sleeps or loses the network leaves it, so a friend in it is online.
     private func showOnline(client: SupabaseClient, userID: UUID) {
         let channel = client.channel("poke-online")
         let changes = channel.presenceChange()
@@ -439,7 +489,9 @@ class PokeService: ObservableObject {
             for await status in channel.statusChange {
                 if status == .subscribed {
                     // Joining again, after a reconnect, needs saying so again.
-                    await channel.track(state: ["user_id": .string(userID.uuidString.lowercased())])
+                    if let state = self?.presenceState(userID: userID) {
+                        await channel.track(state: state)
+                    }
                 } else {
                     // Not connected, so who's online isn't known; joining again brings everyone back.
                     self?.presences = [:]
@@ -454,7 +506,9 @@ class PokeService: ObservableObject {
                 }
                 for (key, presence) in change.joins {
                     if let id = presence.state["user_id"]?.stringValue.flatMap(UUID.init(uuidString:)) {
-                        self?.presences[key] = id
+                        // An app from before meetings were shared doesn't say; it counts as not in one.
+                        let isInMeeting = presence.state["in_meeting"]?.boolValue ?? false
+                        self?.presences[key] = Presence(userID: id, isInMeeting: isInMeeting)
                     }
                 }
                 self?.log.info("Online: \(self?.onlineUserIDs.count ?? 0) people")

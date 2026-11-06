@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ServiceManagement
+import Combine
 
 @main
 struct DynamicIslandApp: App {
@@ -38,11 +39,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let todoService = TodoService.shared
     let jiraService = JiraService.shared
     let meetController = MeetController()
+    private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         themeManager.loadPreference()
         enableLaunchAtLoginOnFirstRun()
+        shareMeetingsWithFriends()
+    }
+
+    /// Friends see a calendar beside your name in Poke while a meeting on your calendar is on or
+    /// you're in a Meet call.
+    private func shareMeetingsWithFriends() {
+        calendarManager.$isInMeeting
+            .combineLatest(meetController.$meeting.map { $0?.isInCall == true })
+            .map { $0 || $1 }
+            .removeDuplicates()
+            .sink { [pokeService] in pokeService.setInMeeting($0) }
+            .store(in: &cancellables)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

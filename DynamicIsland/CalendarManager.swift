@@ -33,6 +33,8 @@ class CalendarManager: ObservableObject {
     @Published private(set) var hasAccess = EKEventStore.authorizationStatus(for: .event) == .fullAccess
     /// A meeting starting within `countdownLead`, or one that started up to `countdownTail` ago.
     @Published private(set) var upcomingMeeting: CalendarEvent?
+    /// A timed event you haven't declined is on right now.
+    @Published private(set) var isInMeeting = false
 
     static let daysBefore = 3
     static let daysAfter = 3
@@ -124,6 +126,11 @@ class CalendarManager: ObservableObject {
             .filter { seen.insert($0.id).inserted }
             .filter { $0.start.timeIntervalSince(now) <= Self.countdownLead && now.timeIntervalSince($0.start) <= Self.countdownTail }
             .sorted { $0.start < $1.start }
+
+        let inMeeting = events(on: now).contains { !$0.isAllDay && !$0.isDeclined && $0.start <= now && now < $0.end }
+        if inMeeting != isInMeeting {
+            isInMeeting = inMeeting
+        }
 
         let next = meetings.first
         if next?.id != upcomingMeeting?.id || next?.start != upcomingMeeting?.start {
