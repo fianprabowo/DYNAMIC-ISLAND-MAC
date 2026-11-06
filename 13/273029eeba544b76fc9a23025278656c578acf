@@ -1,0 +1,21 @@
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_7f6797b6a1df6a 620-622,624-625
+  s_8d4b63dc56ae38::t_b8b3b5e07281e0 69-85
+  s_8d4b63dc56ae38::t_67cd639ce15b45 86-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "13273029eeba544b76fc9a23025278656c578acf",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
