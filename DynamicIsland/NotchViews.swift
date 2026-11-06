@@ -3645,6 +3645,8 @@ private struct PokeFriendsView: View {
     @State private var friendCode = ""
     @State private var message = ""
     @State private var copied = false
+    /// The friend code stays hidden until the eye is clicked, like on a shared screen.
+    @State private var showsCode = false
     @State private var showsEmoji = false
     /// Where the emoji popup starts: just below the message field.
     @State private var messageRowHeight: CGFloat = 46
@@ -3656,11 +3658,49 @@ private struct PokeFriendsView: View {
         return friend
     }
 
+    /// "•••" and an eye; clicked, the whole code and a button that copies it.
+    private func friendCode(_ code: String) -> some View {
+        HStack(spacing: 5) {
+            Text(showsCode ? code : "•••")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .textSelection(.enabled)
+            if showsCode {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(code, forType: .string)
+                    copied = true
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 9))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+                .help("Copy your friend code, to send to a friend")
+            }
+            Button {
+                showsCode.toggle()
+                copied = false
+            } label: {
+                Image(systemName: showsCode ? "eye.slash" : "eye")
+                    .font(.system(size: 9))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(showsCode ? "Hide your friend code" : "Show your friend code")
+        }
+        .foregroundColor(.gray)
+        .fixedSize()
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 if let profile = poke.profile {
                     VStack(alignment: .leading, spacing: 2) {
+                        // Your name on the left, your friend code on the right: hidden until the eye
+                        // is clicked, then shown with a copy button.
                         HStack(spacing: 5) {
                             Circle()
                                 .fill(poke.isListening ? Color.green : Color.gray)
@@ -3668,34 +3708,21 @@ private struct PokeFriendsView: View {
                                 .help(poke.isListening ? "Receiving pokes" : "Connecting…")
                             Text(profile.name)
                                 .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
                             if poke.isInMeeting {
                                 Image(systemName: "calendar")
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundColor(.orange)
                                     .help("Friends see you're in a meeting")
                             }
+                            Spacer(minLength: 6)
+                            friendCode(profile.friendCode)
                         }
                         // What friends see under your name.
                         if let song = poke.sharedSong {
                             SongLine(song: song)
                                 .help("Friends see you're listening to \(song)")
                         }
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(profile.friendCode, forType: .string)
-                            copied = true
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(profile.friendCode)
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                    .font(.system(size: 9))
-                            }
-                            .foregroundColor(.gray)
-                        }
-                        .buttonStyle(.plain)
-                        .pointingHandCursor()
-                        .help("Your friend code: send it to a friend to add you")
                     }
                 }
 
