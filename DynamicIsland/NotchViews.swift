@@ -4003,7 +4003,8 @@ private struct PokeChat: View {
     }
 }
 
-/// The song someone is listening to, like "🎵 Song — Artist", on one line.
+/// The song someone is listening to, like "🎵 Song — Artist", on one line that scrolls when the
+/// song doesn't fit.
 private struct SongLine: View {
     let song: String
 
@@ -4012,18 +4013,64 @@ private struct SongLine: View {
             Image(systemName: "music.note")
                 .font(.system(size: 8))
                 .foregroundColor(.green)
-            Text(song)
-                .font(.system(size: 9))
+            MarqueeText(text: song, font: .system(size: 9))
                 .foregroundColor(.gray)
-                .lineLimit(1)
-                .truncationMode(.tail)
         }
     }
 }
 
+/// One line of text that, when it doesn't fit, waits a moment and then scrolls left in a loop.
+/// Text that fits stays still.
+private struct MarqueeText: View {
+    let text: String
+    let font: Font
+    @State private var textWidth: CGFloat = 0
+    @State private var boxWidth: CGFloat = 0
+    @State private var start = Date()
+
+    /// Points per second.
+    private let speed = 25.0
+    private let gap: CGFloat = 28
+    /// The time the start of the text rests before each loop.
+    private let pause = 1.5
+
+    var body: some View {
+        // As wide as the text when it fits, otherwise as wide as there's room for.
+        Text(text).font(font).lineLimit(1).hidden()
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { boxWidth = $0 }
+            .background(alignment: .leading) {
+                Text(text).font(font).fixedSize().hidden()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { textWidth = $0 }
+            }
+            .overlay(alignment: .leading) {
+                let overflows = textWidth > boxWidth + 0.5
+                TimelineView(.animation(paused: !overflows)) { context in
+                    HStack(spacing: gap) {
+                        Text(text).font(font).fixedSize()
+                        // A second copy follows the first, so the loop is seamless.
+                        if overflows {
+                            Text(text).font(font).fixedSize()
+                        }
+                    }
+                    .offset(x: overflows ? -scroll(at: context.date) : 0)
+                }
+                .frame(width: boxWidth, alignment: .leading)
+                .clipped()
+            }
+            .onChange(of: text) { start = Date() }
+    }
+
+    private func scroll(at date: Date) -> CGFloat {
+        let distance = Double(textWidth + gap)
+        let cycle = pause + distance / speed
+        let elapsed = date.timeIntervalSince(start).truncatingRemainder(dividingBy: cycle)
+        return elapsed < pause ? 0 : CGFloat((elapsed - pause) * speed)
+    }
+}
+
 /// A friend's name, with a green dot while they're online, a calendar while they're in a meeting
-/// and the song they're listening to below; clicking picks them to poke. Hovering shows a button
-/// to remove them.
+/// and the song they're listening to, all on one line; clicking picks them to poke. Hovering shows
+/// a button to remove them.
 private struct FriendRow: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
@@ -4034,31 +4081,27 @@ private struct FriendRow: View {
 
     var body: some View {
         let isOnline = poke.isOnline(friend)
-        HStack(alignment: .top, spacing: 6) {
+        HStack(spacing: 6) {
             Circle()
                 .fill(isOnline ? Color.green : Color.white.opacity(0.25))
                 .frame(width: 6, height: 6)
-                .padding(.top, 4)
                 .animation(.easeInOut(duration: 0.2), value: isOnline)
                 .help(isOnline ? "\(friend.name) is online" : "\(friend.name) is offline")
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(friend.name)
-                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-                        .lineLimit(1)
-                    if poke.isInMeeting(friend) {
-                        Image(systemName: "calendar")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundColor(.orange)
-                            .help("\(friend.name) is in a meeting")
-                            .transition(.opacity)
-                    }
-                }
-                if let song = poke.song(of: friend) {
-                    SongLine(song: song)
-                        .help("\(friend.name) is listening to \(song)")
-                        .transition(.opacity)
-                }
+            Text(friend.name)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
+                .layoutPriority(1)
+            if poke.isInMeeting(friend) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(.orange)
+                    .help("\(friend.name) is in a meeting")
+                    .transition(.opacity)
+            }
+            if let song = poke.song(of: friend) {
+                SongLine(song: song)
+                    .help("\(friend.name) is listening to \(song)")
+                    .transition(.opacity)
             }
             Spacer(minLength: 0)
             if isPoked {
