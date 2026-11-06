@@ -121,6 +121,8 @@ class PokeService: ObservableObject {
         }
     }
     private struct Presence {
+        /// The server's id for this report; a later report replaces it.
+        let ref: String
         let userID: UUID
         let isInMeeting: Bool
         let song: String?
@@ -171,6 +173,7 @@ class PokeService: ObservableObject {
     private(set) var client: SupabaseClient?
     private var channel: RealtimeChannelV2?
     private var presenceChannel: RealtimeChannelV2?
+    private var presenceTasks: [Task<Void, Never>] = []
     private var listenTasks: [Task<Void, Never>] = []
     private var retryTask: Task<Void, Never>?
     /// Pokes shown since launch; Realtime and catching up can both bring the same one.
@@ -524,6 +527,7 @@ class PokeService: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(pollInterval))
                 await self?.fetchMissed()
+                await self?.rejoinOnlineIfDropped()
             }
         })
         showOnline(client: client, userID: userID)
@@ -534,11 +538,12 @@ class PokeService: ObservableObject {
     /// play, unless they turned that off). An app that
     /// quits, sleeps or loses the network leaves it, so a friend in it is online.
     private func showOnline(client: SupabaseClient, userID: UUID) {
+        presenceTasks.forEach { $0.cancel() }
         let channel = client.channel("poke-online")
         let changes = channel.presenceChange()
         presenceChannel = channel
 
-        listenTasks.append(Task { [weak self] in
+        presenceTasks.append(Task { [weak self] in
             for await status in channel.statusChange {
                 if status == .subscribed {
                     // Joining again, after a reconnect, needs saying so again.
@@ -551,10 +556,12 @@ class PokeService: ObservableObject {
                 }
             }
         })
-        listenTasks.append(Task { [weak self] in
+        presenceTasks.append(Task { [weak self] in
             for await change in changes {
-                // An app that says so again leaves and joins in one change; it stays online.
-                for key in change.leaves.keys {
+                // An app that says something new (a song, a meeting) leaves with its old report
+                // and joins with the new one. Only the report it left with goes, so it stays
+                // online even when the join comes first.
+                for (key, presence) in change.leaves where self?.presences[key]?.ref == presence.ref {
                     self?.presences[key] = nil
                 }
                 for (key, presence) in change.joins {
@@ -562,13 +569,13 @@ class PokeService: ObservableObject {
                         // An app from before meetings were shared doesn't say; it counts as not in one.
                         let isInMeeting = presence.state["in_meeting"]?.boolValue ?? false
                         let song = presence.state["song"]?.stringValue.map { String($0.prefix(Self.songLimit)) }
-                        self?.presences[key] = Presence(userID: id, isInMeeting: isInMeeting, song: song?.isEmpty == false ? song : nil)
+                        self?.presences[key] = Presence(ref: presence.ref, userID: id, isInMeeting: isInMeeting, song: song?.isEmpty == false ? song : nil)
                     }
                 }
                 self?.log.info("Online: \(self?.onlineUserIDs.count ?? 0) people")
             }
         })
-        listenTasks.append(Task { [weak self] in
+        presenceTasks.append(Task { [weak self] in
             do {
                 try await channel.subscribeWithError()
             } catch {
@@ -577,9 +584,22 @@ class PokeService: ObservableObject {
         })
     }
 
+    /// The online channel can drop on its own (a failed join, a network change) while pokes still
+    /// arrive; then this Mac and its friends would look offline to each other until a relaunch.
+    private func rejoinOnlineIfDropped() async {
+        guard let client, let userID = profile?.id, let channel = presenceChannel,
+              channel.status == .unsubscribed else { return }
+        log.info("Online channel dropped; joining again")
+        await client.removeChannel(channel)
+        presences = [:]
+        showOnline(client: client, userID: userID)
+    }
+
     private func stopListening() {
         listenTasks.forEach { $0.cancel() }
         listenTasks = []
+        presenceTasks.forEach { $0.cancel() }
+        presenceTasks = []
         if let client {
             for channel in [channel, presenceChannel].compactMap({ $0 }) {
                 Task { await client.removeChannel(channel) }

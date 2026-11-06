@@ -66,7 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return artist.isEmpty ? track : "\(track) — \(artist)"
             }
             // The title and the artist change one after the other; say the song once.
-            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [pokeService] in pokeService.setNowPlaying($0) }
             .store(in: &cancellables)

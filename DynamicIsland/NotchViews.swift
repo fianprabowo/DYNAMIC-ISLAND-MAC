@@ -347,7 +347,7 @@ private struct NotchBannerView: View {
             }
 
             // In the open panel the toast has it in its corner instead.
-            if notification.type == .poke && !isInPanel {
+            if !isInPanel {
                 BannerCloseButton()
             }
         }
@@ -445,7 +445,7 @@ private struct NotchBannerView: View {
     }
 }
 
-/// Puts a poke's banner away at once; the poke stays in the Alerts tab. `compact` is the small one
+/// Puts a banner away at once; the notification stays in the Alerts tab. `compact` is the small one
 /// in the corner of the toast in the open panel.
 private struct BannerCloseButton: View {
     @EnvironmentObject var notificationManager: NotificationManager
@@ -706,10 +706,8 @@ private struct NotchExpandedView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.1)))
                 .overlay(alignment: .topTrailing) {
-                    if banner.type == .poke {
-                        BannerCloseButton(compact: true)
-                            .offset(x: 5, y: -5)
-                    }
+                    BannerCloseButton(compact: true)
+                        .offset(x: 5, y: -5)
                 }
                 .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
                 .padding(.bottom, 10)

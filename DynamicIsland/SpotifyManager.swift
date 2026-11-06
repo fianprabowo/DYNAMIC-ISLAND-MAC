@@ -35,6 +35,11 @@ class SpotifyManager: ObservableObject {
     private var wasPlaying: Set<MediaPlayerApp> = []
     private var latestSnapshots: [MediaPlayerApp: Snapshot] = [:]
 
+    private var isRefreshing = false
+    /// A refresh was asked for while one was running; it runs again right after.
+    private var refreshAgain = false
+    private var playerObservers: [NSObjectProtocol] = []
+
     init() {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -42,13 +47,38 @@ class SpotifyManager: ObservableObject {
                 try? await Task.sleep(for: .seconds(1.5))
             }
         }
+        // Spotify and Music announce a new track, play and pause at once, so those show (and reach
+        // friends) without waiting for the next poll.
+        let center = DistributedNotificationCenter.default()
+        for name in ["com.spotify.client.PlaybackStateChanged", "com.apple.Music.playerInfo"] {
+            playerObservers.append(center.addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    Task { await self?.refresh() }
+                }
+            })
+        }
     }
 
     deinit {
         pollTask?.cancel()
+        playerObservers.forEach(DistributedNotificationCenter.default().removeObserver)
     }
 
+    /// Reads the players again; one at a time, so an older reading never lands after a newer one.
     func refresh() async {
+        guard !isRefreshing else {
+            refreshAgain = true
+            return
+        }
+        isRefreshing = true
+        repeat {
+            refreshAgain = false
+            await poll()
+        } while refreshAgain
+        isRefreshing = false
+    }
+
+    private func poll() async {
         let started = Date()
         var snapshots: [(MediaPlayerApp, Snapshot)] = []
         for app in MediaPlayerApp.runningApps {
