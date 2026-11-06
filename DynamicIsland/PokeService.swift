@@ -733,7 +733,7 @@ class PokeService: ObservableObject {
 
         if isPokeTabVisible {
             if !FocusStatus.isActive {
-                PokeSound.play()
+                AlertSound.poke.play()
             }
             return
         }
@@ -750,7 +750,7 @@ class PokeService: ObservableObject {
         // The poke sound (Ping unless another is picked in Settings), so it's heard even when
         // you're not looking at the notch.
         if !FocusStatus.isActive {
-            PokeSound.play()
+            AlertSound.poke.play()
         }
     }
 

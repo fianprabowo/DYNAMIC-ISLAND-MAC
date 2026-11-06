@@ -411,6 +411,11 @@ private struct NotchBannerView: View {
             layout.selectedTab = .poke
             layout.expand()
             notificationManager.dismissBanner()
+        } else if notification.type == .todo {
+            // A todo that's due opens the Todo tab.
+            layout.selectedTab = .todo
+            layout.expand()
+            notificationManager.dismissBanner()
         } else {
             notification.open()
             notificationManager.dismissBanner()
@@ -496,6 +501,7 @@ private struct NotificationIcon: View {
 private let timerColor = Color.orange
 private let pokeColor = Color.pink
 private let vpnColor = Color.green
+private let todoColor = Color.cyan
 
 private func notificationTint(_ type: NotificationType, _ themeManager: ThemeManager) -> Color {
     switch type {
@@ -506,6 +512,7 @@ private func notificationTint(_ type: NotificationType, _ themeManager: ThemeMan
     case .timer: return timerColor
     case .poke: return pokeColor
     case .vpn: return vpnColor
+    case .todo: return todoColor
     default: return Color(themeManager.currentTheme.accentColor)
     }
 }
@@ -1595,7 +1602,8 @@ private struct SettingsMenu: View {
     @EnvironmentObject var poke: PokeService
     @EnvironmentObject var themeManager: ThemeManager
     @EnvironmentObject var hud: HUDMonitor
-    @AppStorage(PokeSound.key) private var pokeSound = PokeSound.defaultName
+    @AppStorage(AlertSound.poke.key) private var pokeSound = AlertSound.poke.defaultName
+    @AppStorage(AlertSound.todo.key) private var todoSound = AlertSound.todo.defaultName
 
     var body: some View {
         Menu {
@@ -1606,7 +1614,8 @@ private struct SettingsMenu: View {
                 Toggle("Poke Effects", isOn: $layout.pokeEffects)
                 Toggle("Bouncy Opening", isOn: $layout.bouncyOpen)
             }
-            pokeSoundMenu
+            soundMenu(.poke, selection: $pokeSound)
+            soundMenu(.todo, selection: $todoSound)
             Toggle("Share What I'm Playing", isOn: $poke.sharesNowPlaying)
             Toggle("Launch at Login", isOn: Binding(get: { LaunchAtLogin.isEnabled }, set: { LaunchAtLogin.isEnabled = $0 }))
             Picker("Theme", selection: Binding(get: { themeManager.currentPreset }, set: { themeManager.setTheme($0) })) {
@@ -1630,30 +1639,30 @@ private struct SettingsMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .tint(.gray)
-        .onAppear(perform: PokeSound.previewOnHover)
+        .onAppear(perform: AlertSound.previewOnHover)
     }
 
     /// Resting on a sound plays it, and so does picking one; your own sounds (in ~/Library/Sounds) come first.
-    private var pokeSoundMenu: some View {
-        Menu(PokeSound.menuTitle) {
-            let custom = PokeSound.customNames
-            ForEach(custom, id: \.self) { soundItem($0) }
+    private func soundMenu(_ sound: AlertSound, selection: Binding<String>) -> some View {
+        Menu(sound.menuTitle) {
+            let custom = AlertSound.customNames
+            ForEach(custom, id: \.self) { soundItem($0, selection: selection) }
             if !custom.isEmpty {
                 Divider()
             }
-            ForEach(PokeSound.systemNames, id: \.self) { soundItem($0) }
+            ForEach(AlertSound.systemNames, id: \.self) { soundItem($0, selection: selection) }
             Divider()
             Button("Choose Sound File…") {
-                PokeSound.importFile()
-                pokeSound = PokeSound.name
+                sound.importFile()
+                selection.wrappedValue = sound.name
             }
         }
     }
 
-    private func soundItem(_ name: String) -> some View {
-        Toggle(name, isOn: Binding(get: { pokeSound == name }, set: { _ in
-            pokeSound = name
-            PokeSound.play(name)
+    private func soundItem(_ name: String, selection: Binding<String>) -> some View {
+        Toggle(name, isOn: Binding(get: { selection.wrappedValue == name }, set: { _ in
+            selection.wrappedValue = name
+            AlertSound.play(name)
         }))
     }
 }

@@ -1,11 +1,24 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// The sound a poke plays when it arrives: one of macOS's alert sounds, or a sound of your own.
-/// Your own sounds live in ~/Library/Sounds, on this Mac only, where macOS finds them by name.
-enum PokeSound {
-    static let key = "pokeSound"
-    static let defaultName = "Ping"
+/// A sound the island plays for something that arrives, picked in Settings: a poke, or a todo
+/// whose time has come. One of macOS's alert sounds, or a sound of your own. Your own sounds live
+/// in ~/Library/Sounds, on this Mac only, where macOS finds them by name.
+struct AlertSound {
+    /// Where the pick is kept in UserDefaults (and `@AppStorage`).
+    let key: String
+    /// Plays when nothing is picked, or the picked sound is gone.
+    let defaultName: String
+    /// The Settings submenu that lists the sounds; resting on one plays it.
+    let menuTitle: String
+    /// The title of the file panel that adds a sound of your own.
+    let chooseTitle: String
+
+    static let poke = AlertSound(key: "pokeSound", defaultName: "Ping",
+                                 menuTitle: "Poke Sound", chooseTitle: "Choose a Poke Sound")
+    static let todo = AlertSound(key: "todoSound", defaultName: "Glass",
+                                 menuTitle: "Todo Sound", chooseTitle: "Choose a Todo Sound")
+    private static let all = [poke, todo]
 
     private static let audioExtensions: Set<String> = ["aiff", "aif", "caf", "wav", "mp3", "m4a", "m4r"]
     private static let systemFolder = URL(fileURLWithPath: "/System/Library/Sounds")
@@ -15,9 +28,9 @@ enum PokeSound {
     /// Keeps the sound alive while it plays.
     private static var player: NSSound?
 
-    static var name: String {
+    var name: String {
         get { UserDefaults.standard.string(forKey: key) ?? defaultName }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
+        nonmutating set { UserDefaults.standard.set(newValue, forKey: key) }
     }
 
     static var systemNames: [String] { names(in: systemFolder) }
@@ -31,10 +44,15 @@ enum PokeSound {
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    /// Plays the chosen sound, or Ping if it's gone.
-    static func play(_ soundName: String = name) {
+    /// Plays the chosen sound, or the default one if it's gone.
+    func play() {
+        Self.play(name, fallback: defaultName)
+    }
+
+    /// Plays a sound by name, like one you're trying out.
+    static func play(_ soundName: String, fallback: String? = nil) {
         player?.stop()
-        player = sound(named: soundName) ?? NSSound(named: defaultName)
+        player = sound(named: soundName) ?? fallback.flatMap { NSSound(named: $0) }
         player?.play()
     }
 
@@ -53,10 +71,34 @@ enum PokeSound {
         player = nil
     }
 
+    func choose(_ soundName: String) {
+        name = soundName
+        Self.play(soundName)
+    }
+
+    /// Copies an audio file you pick into ~/Library/Sounds and uses it for this sound.
+    func importFile() {
+        let panel = NSOpenPanel()
+        panel.title = chooseTitle
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        NSApp.activate()
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        do {
+            try FileManager.default.createDirectory(at: Self.userFolder, withIntermediateDirectories: true)
+            let destination = Self.userFolder.appending(path: source.lastPathComponent)
+            if destination.standardizedFileURL != source.standardizedFileURL {
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.copyItem(at: source, to: destination)
+            }
+            choose(destination.deletingPathExtension().lastPathComponent)
+        } catch {
+            NSSound.beep()
+        }
+    }
+
     // MARK: Trying sounds out
 
-    /// The Settings submenu that lists the sounds; resting on one plays it.
-    static let menuTitle = "Poke Sound"
     /// How long the pointer rests on a sound before it plays, so sweeping past doesn't.
     private static let hoverDelay: TimeInterval = 0.2
     private static var observers: [NSObjectProtocol] = []
@@ -67,14 +109,14 @@ enum PokeSound {
     private static var playedHighlight = false
 
     /// macOS menus don't tell SwiftUI what's under the pointer, so while the Settings menu is open
-    /// the sound submenu's highlighted item is checked a few times a second.
+    /// the sound submenus' highlighted item is checked a few times a second.
     static func previewOnHover() {
         guard observers.isEmpty else { return }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { note in
             let menu = note.object as? NSMenu
             MainActor.assumeIsolated {
-                guard let menu, menu.item(withTitle: menuTitle)?.submenu != nil else { return }
+                guard let menu, all.contains(where: { menu.item(withTitle: $0.menuTitle)?.submenu != nil }) else { return }
                 watch(menu)
             }
         })
@@ -109,7 +151,9 @@ enum PokeSound {
     }
 
     private static func checkHighlight() {
-        let item = watchedMenu?.item(withTitle: menuTitle)?.submenu?.highlightedItem
+        let item = all.lazy
+            .compactMap { watchedMenu?.item(withTitle: $0.menuTitle)?.submenu?.highlightedItem }
+            .first
         let title = item.flatMap { $0.submenu == nil && $0.isEnabled ? $0.title : nil }
         if title != highlighted {
             if highlighted != nil {
@@ -124,32 +168,6 @@ enum PokeSound {
             if (customNames + systemNames).contains(title) {
                 play(title)
             }
-        }
-    }
-
-    static func choose(_ soundName: String) {
-        name = soundName
-        play(soundName)
-    }
-
-    /// Copies an audio file you pick into ~/Library/Sounds and uses it for pokes.
-    static func importFile() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose a Poke Sound"
-        panel.allowedContentTypes = [.audio]
-        panel.allowsMultipleSelection = false
-        NSApp.activate()
-        guard panel.runModal() == .OK, let source = panel.url else { return }
-        do {
-            try FileManager.default.createDirectory(at: userFolder, withIntermediateDirectories: true)
-            let destination = userFolder.appending(path: source.lastPathComponent)
-            if destination.standardizedFileURL != source.standardizedFileURL {
-                try? FileManager.default.removeItem(at: destination)
-                try FileManager.default.copyItem(at: source, to: destination)
-            }
-            choose(destination.deletingPathExtension().lastPathComponent)
-        } catch {
-            NSSound.beep()
         }
     }
 }

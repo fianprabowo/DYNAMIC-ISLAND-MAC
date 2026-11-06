@@ -33,7 +33,7 @@ struct AppNotification: Identifiable, Codable {
 enum NotificationType: String, CaseIterable, Codable {
     case system, message, warning, reminder, network, app
     /// The island's own live activities (see `NotificationManager.postActivity`).
-    case claude, meeting, power, audio, timer, poke, vpn
+    case claude, meeting, power, audio, timer, poke, vpn, todo
 
     var icon: String {
         switch self {
@@ -50,6 +50,7 @@ enum NotificationType: String, CaseIterable, Codable {
         case .timer: return "timer"
         case .poke: return "hand.point.right.fill"
         case .vpn: return "lock.shield.fill"
+        case .todo: return "checklist"
         }
     }
 

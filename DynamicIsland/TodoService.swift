@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import OSLog
@@ -10,6 +11,9 @@ import Supabase
 ///
 /// Ticking off and deleting show at once and are undone if Supabase turns them down; a new todo
 /// shows once Supabase has given it its id.
+///
+/// When an open todo's time comes, yours or one shared with any friend, the notch drops down with
+/// it and the todo sound plays (picked in Settings), once, also during a Focus, and it's kept in the Alerts tab.
 class TodoService: ObservableObject {
     static let shared = TodoService()
 
@@ -91,6 +95,15 @@ class TodoService: ObservableObject {
     private var channel: (client: SupabaseClient, channel: RealtimeChannelV2)?
     private var channelTask: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
+    /// Every open todo with a time you can see, in any list, for the reminders.
+    private var dueTodos: [Todo] = []
+    private var reminderTask: Task<Void, Never>?
+    /// Reminders already shown, as "id@due time", so each shows once, also across launches.
+    private var remindedKeys: [String] = UserDefaults.standard.stringArray(forKey: TodoService.remindedKey) ?? []
+
+    private static let remindedKey = "todoRemindedKeys"
+    /// A todo whose time passed longer ago than this, like while the Mac was off, isn't announced.
+    private static let reminderGrace: TimeInterval = 15 * 60
 
     private nonisolated struct NewTodo: Encodable, Sendable {
         let title: String
@@ -161,6 +174,10 @@ class TodoService: ObservableObject {
                 } else if todo.friendID == sharedFriend?.id {
                     if !sharedTodos.contains(where: { $0.id == todo.id }) { sharedTodos.append(todo) }
                 }
+                if todo.dueAt != nil, !dueTodos.contains(where: { $0.id == todo.id }) {
+                    dueTodos.append(todo)
+                    scheduleReminder()
+                }
                 sort()
             } catch {
                 report(error, doing: "add")
@@ -187,6 +204,7 @@ class TodoService: ObservableObject {
         guard let client = poke.client else { return }
         todos.removeAll { $0.id == todo.id }
         sharedTodos.removeAll { $0.id == todo.id }
+        dueTodos.removeAll { $0.id == todo.id }
         Task {
             do {
                 try await client.from("todos").delete().eq("id", value: todo.id).execute()
@@ -204,6 +222,7 @@ class TodoService: ObservableObject {
         let ids = list(shared).filter(\.isDone).map(\.id)
         todos.removeAll { ids.contains($0.id) }
         sharedTodos.removeAll { ids.contains($0.id) }
+        dueTodos.removeAll { ids.contains($0.id) }
         Task {
             do {
                 try await client.from("todos").delete().in("id", values: ids).execute()
@@ -227,7 +246,9 @@ class TodoService: ObservableObject {
     private func change(_ id: Int, _ update: (inout Todo) -> Void) {
         if let index = todos.firstIndex(where: { $0.id == id }) { update(&todos[index]) }
         if let index = sharedTodos.firstIndex(where: { $0.id == id }) { update(&sharedTodos[index]) }
+        if let index = dueTodos.firstIndex(where: { $0.id == id }) { update(&dueTodos[index]) }
         sort()
+        scheduleReminder()
     }
 
     private func pokeStateChanged(_ pokeState: PokeService.State) {
@@ -236,6 +257,8 @@ class TodoService: ObservableObject {
             stopListening()
             todos = []
             sharedTodos = []
+            dueTodos = []
+            scheduleReminder()
             state = .needsProject
         case .connecting:
             stopListening()
@@ -272,11 +295,17 @@ class TodoService: ObservableObject {
                     .or("and(user_id.eq.\(me),friend_id.eq.\(friend)),and(user_id.eq.\(friend),friend_id.eq.\(me))")
                     .order("id").execute().value
             }
+            // Row level security leaves yours and the ones shared with you, with any friend.
+            let due: [Todo] = try await client.from("todos").select(Self.columns)
+                .filter("due_at", operator: "not.is", value: "null").eq("is_done", value: false)
+                .order("due_at").limit(400).execute().value
             // Change Project, or another friend, took over meanwhile.
             guard poke.client === client, sharedFriend?.id == friend else { return }
             todos = mine
             sharedTodos = shared
+            dueTodos = due
             sort()
+            scheduleReminder()
             state = .ready
             listen(client: client, userID: me)
         } catch {
@@ -319,6 +348,58 @@ class TodoService: ObservableObject {
             Task { await current.client.removeChannel(current.channel) }
         }
         channel = nil
+    }
+
+    // MARK: Reminders
+
+    /// Waits for the next open todo's time, then announces every one that's due.
+    private func scheduleReminder() {
+        reminderTask?.cancel()
+        let now = Date()
+        let next = dueTodos
+            .filter { !$0.isDone && !remindedKeys.contains(Self.reminderKey($0)) }
+            .compactMap(\.dueAt)
+            .filter { $0 > now.addingTimeInterval(-Self.reminderGrace) }
+            .min()
+        guard let next else { return }
+        reminderTask = Task { [weak self] in
+            let wait = next.timeIntervalSinceNow
+            if wait > 0 {
+                try? await Task.sleep(for: .seconds(wait))
+            }
+            guard !Task.isCancelled, let self else { return }
+            announceDue()
+            scheduleReminder()
+        }
+    }
+
+    private func announceDue() {
+        let now = Date()
+        for todo in dueTodos where !todo.isDone {
+            guard let dueAt = todo.dueAt, dueAt <= now, now.timeIntervalSince(dueAt) < Self.reminderGrace else { continue }
+            let key = Self.reminderKey(todo)
+            guard !remindedKeys.contains(key) else { continue }
+            remindedKeys.append(key)
+            let body = sharedName(of: todo).map { "Due now · shared with \($0)" } ?? "Due now"
+            NotificationManager.shared.postActivity(AppNotification(type: .todo, title: todo.title, body: body),
+                                                    keepInFeed: true, duringFocus: true)
+            AlertSound.todo.play()
+            log.info("Reminded of todo \(todo.id, privacy: .public)")
+        }
+        remindedKeys = Array(remindedKeys.suffix(200))
+        UserDefaults.standard.set(remindedKeys, forKey: Self.remindedKey)
+    }
+
+    /// The friend a todo is shared with, from your side: the one who isn't you.
+    private func sharedName(of todo: Todo) -> String? {
+        guard let friendID = todo.friendID else { return nil }
+        let other = todo.userID == userID ? friendID : todo.userID
+        return poke.friends.first(where: { $0.id == other })?.name
+    }
+
+    /// A todo moved to another time is announced again.
+    private static func reminderKey(_ todo: Todo) -> String {
+        "\(todo.id)@\(Int(todo.dueAt?.timeIntervalSince1970 ?? 0))"
     }
 
     /// A few changes in a row, like Clear Done, read the lists once.
