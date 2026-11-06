@@ -1,0 +1,39 @@
+DynamicIsland/MyApp.swift
+  s_8d4b63dc56ae38::t_27e45675a505d7 4,42,48-59
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_9816b10ea2abe1 3910
+  s_8d4b63dc56ae38::t_8bc55f52bf88d1 133
+  s_8d4b63dc56ae38::t_0e6fc2d90d8f21 3894-3900,3902-3906,3911,3913-3914,3918-3919
+  s_8d4b63dc56ae38::t_4b3020a2148d49 3885-3886,3890,3907-3909,3912,3915-3917,3920,3930
+  s_8d4b63dc56ae38::t_05a81693409bcc 178-186
+  s_8d4b63dc56ae38::t_27e45675a505d7 3966-3967,3987-3993
+README.md
+  s_8d4b63dc56ae38::t_9816b10ea2abe1 31
+  s_8d4b63dc56ae38::t_64a948ad456e57 130
+  s_8d4b63dc56ae38::t_8bc55f52bf88d1 21
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_4b3020a2148d49 152-158,210,360-364,371-376
+  s_8d4b63dc56ae38::t_27e45675a505d7 96-100,102,106-109,112-117,338-353,377,481-482,492-494,509-511
+  s_8d4b63dc56ae38::t_f8d9265feaa0a3 354,378
+DynamicIsland/CalendarManager.swift
+  s_8d4b63dc56ae38::t_27e45675a505d7 36-37,130-133
+  s_8d4b63dc56ae38::t_4cce21c6f8327f 134
+DynamicIsland/FloatingPanel.swift
+  s_8d4b63dc56ae38::t_b7165293680163 489-490,492
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "2293ad341ff4a5669b845b8f7e97673fe2fc58ad",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
