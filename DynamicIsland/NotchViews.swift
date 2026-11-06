@@ -3826,6 +3826,9 @@ private struct PokeFriendsView: View {
             }
         }
         .onChange(of: selectedFriend?.id) { showsEmoji = false }
+        // A poke coming in while this is on screen just shows up in the chat, without a banner.
+        .onAppear { poke.isPokeTabVisible = true }
+        .onDisappear { poke.isPokeTabVisible = false }
         .task(id: selectedFriend?.id) {
             if let id = selectedFriend?.id {
                 await poke.loadHistory(with: id)

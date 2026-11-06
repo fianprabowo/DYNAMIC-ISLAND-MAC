@@ -188,6 +188,9 @@ class PokeService: ObservableObject {
     private var presenceChannel: RealtimeChannelV2?
     private var presenceTasks: [Task<Void, Never>] = []
     private var markingSeen: Set<UUID> = []
+    /// The open notch shows the Poke tab: a new poke then appears in the chat and the friend list,
+    /// with its sound but without a banner.
+    var isPokeTabVisible = false
     private var isMarkingDelivered = false
     private var markDeliveredAgain = false
     private var listenTasks: [Task<Void, Never>] = []
@@ -726,6 +729,13 @@ class PokeService: ObservableObject {
         addToHistory(poke, friendID: poke.senderID)
         if !friends.contains(where: { $0.id == poke.senderID }) {
             refreshFriends()
+        }
+
+        if isPokeTabVisible {
+            if !FocusStatus.isActive {
+                PokeSound.play()
+            }
+            return
         }
 
         let title = "\(poke.senderName) poked you"
