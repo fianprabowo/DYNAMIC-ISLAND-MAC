@@ -26,7 +26,7 @@ class TodoService: ObservableObject {
         /// The friend it's shared with; nil for your own.
         let friendID: UUID?
         /// When it's due, if it has a date and time.
-        let dueAt: Date?
+        var dueAt: Date?
 
         enum CodingKeys: String, CodingKey {
             case id, title
@@ -198,6 +198,49 @@ class TodoService: ObservableObject {
                 report(error, doing: "change")
             }
         }
+    }
+
+    /// Changes a todo's title, like after editing it in place.
+    func rename(_ todo: Todo, to title: String) {
+        let title = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxTitleLength))
+        guard let client = poke.client, !title.isEmpty, title != todo.title else { return }
+        let old = todo.title
+        change(todo.id) { $0.title = title }
+        Task {
+            do {
+                try await client.from("todos").update(["title": title]).eq("id", value: todo.id).execute()
+                actionError = nil
+            } catch {
+                change(todo.id) { $0.title = old }
+                report(error, doing: "change")
+            }
+        }
+    }
+
+    /// Moves a todo to another time, or takes its time away; a new time is reminded of again.
+    func setDue(_ todo: Todo, _ due: Date?) {
+        guard let client = poke.client, due != todo.dueAt else { return }
+        let old = todo.dueAt
+        applyDue(todo, due)
+        Task {
+            do {
+                let value: String? = due.map { ISO8601DateFormatter().string(from: $0) }
+                try await client.from("todos").update(["due_at": value]).eq("id", value: todo.id).execute()
+                actionError = nil
+            } catch {
+                applyDue(todo, old)
+                report(error, doing: "change")
+            }
+        }
+    }
+
+    private func applyDue(_ todo: Todo, _ due: Date?) {
+        if due == nil {
+            dueTodos.removeAll { $0.id == todo.id }
+        } else if !dueTodos.contains(where: { $0.id == todo.id }), !todo.isDone {
+            dueTodos.append(todo)
+        }
+        change(todo.id) { $0.dueAt = due }
     }
 
     func delete(_ todo: Todo) {

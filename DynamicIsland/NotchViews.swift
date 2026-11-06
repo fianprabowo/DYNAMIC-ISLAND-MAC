@@ -824,10 +824,11 @@ private struct MyTodosColumn: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(header)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.gray)
+            HStack(spacing: 6) {
+                TodoProgressRing(items: todo.todos)
+                Text("My todos")
+                    .font(.system(size: 12, weight: .bold))
+                TodoCountLabel(items: todo.todos)
                 Spacer()
                 ClearDoneButton(shared: false)
             }
@@ -836,11 +837,54 @@ private struct MyTodosColumn: View {
             }
         }
     }
+}
 
-    private var header: String {
-        if todo.todos.isEmpty { return "My todos" }
-        let remaining = todo.remainingCount(shared: false)
-        return remaining == 0 ? "My todos · all done" : "My todos · \(remaining) to do"
+/// How much of a list is ticked off, as a small ring that turns green with a tick once it's all done.
+private struct TodoProgressRing: View {
+    @EnvironmentObject var themeManager: ThemeManager
+    let items: [TodoService.Todo]
+
+    private var progress: Double {
+        items.isEmpty ? 0 : Double(items.filter(\.isDone).count) / Double(items.count)
+    }
+    private var isComplete: Bool { !items.isEmpty && progress == 1 }
+
+    var body: some View {
+        let tint = isComplete ? Color.green : Color(themeManager.currentTheme.accentColor)
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.12), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            if isComplete {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7, weight: .heavy))
+                    .foregroundColor(.green)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .frame(width: 15, height: 15)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: progress)
+        .help(items.isEmpty ? "No todos" : "\(items.filter(\.isDone).count) of \(items.count) done")
+    }
+}
+
+/// "3 to do", "all done 🎉", or nothing for an empty list.
+private struct TodoCountLabel: View {
+    let items: [TodoService.Todo]
+
+    var body: some View {
+        let remaining = items.filter { !$0.isDone }.count
+        if !items.isEmpty {
+            Text(remaining == 0 ? "all done 🎉" : "\(remaining) to do")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(remaining == 0 ? .green : .gray)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: remaining)
+                .fixedSize()
+        }
     }
 }
 
@@ -854,9 +898,9 @@ private struct SharedTodosColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text("Shared with")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.gray)
+                TodoProgressRing(items: todo.sharedFriend == nil ? [] : todo.sharedTodos)
+                Text("Shared")
+                    .font(.system(size: 12, weight: .bold))
                     .fixedSize()
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
@@ -896,15 +940,26 @@ private struct SharedTodosColumn: View {
 
     private func friendChip(_ friend: PokeService.Friend) -> some View {
         let isSelected = friend.id == todo.sharedFriend?.id
-        return Button { todo.sharedFriendID = friend.id } label: {
-            Text(friend.name)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .foregroundColor(isSelected ? .white : .gray)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(isSelected ? Color(themeManager.currentTheme.accentColor).opacity(0.35) : Color.white.opacity(0.07))
-                .clipShape(Capsule())
+        let accent = Color(themeManager.currentTheme.accentColor)
+        return Button {
+            withAnimation(.snappy) { todo.sharedFriendID = friend.id }
+        } label: {
+            HStack(spacing: 4) {
+                Text(String(friend.name.prefix(1)).uppercased())
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundColor(.white)
+                    .frame(width: 14, height: 14)
+                    .background(Circle().fill(isSelected ? accent : Color.white.opacity(0.18)))
+                Text(friend.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .foregroundColor(isSelected ? .white : .gray)
+            }
+            .padding(.leading, 2)
+            .padding(.trailing, 8)
+            .padding(.vertical, 2)
+            .background(isSelected ? accent.opacity(0.3) : Color.white.opacity(0.07))
+            .clipShape(Capsule())
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
@@ -932,7 +987,9 @@ private struct ClearDoneButton: View {
 }
 
 /// A list's add field and its todos: type and press Enter to add, click the circle to tick one
-/// off, hover to delete it. The calendar in the field gives the new todo a date and time.
+/// off. A date typed in the title ("besok jam 10", "tomorrow 3pm") becomes the todo's time; the
+/// calendar in the field sets one by hand. The todos are grouped by when they're due, and the
+/// ticked-off ones fold away under Done.
 private struct TodoList: View {
     @EnvironmentObject var todo: TodoService
     @EnvironmentObject var themeManager: ThemeManager
@@ -945,71 +1002,56 @@ private struct TodoList: View {
     @State private var newTitle = ""
     /// When the new todo is due, while the date row is open.
     @State private var due: Date?
+    /// The date found in the title, unless it was waved away.
+    @State private var ignoresTypedDate = false
+    @State private var showsDone = false
     @FocusState private var isFieldFocused: Bool
 
     private var accent: Color { Color(themeManager.currentTheme.accentColor) }
     private var canAdd: Bool {
         !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !todo.isAdding
     }
+    /// A date in the title counts only when none is set by hand and it leaves some title.
+    private var typedDate: TodoDateParser.Match? {
+        guard due == nil, !ignoresTypedDate, let match = TodoDateParser.parse(newTitle), !match.title.isEmpty else { return nil }
+        return match
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                TextField(placeholder, text: $newTitle)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .focused($isFieldFocused)
-                    .onSubmit(submit)
-                    .onChange(of: newTitle) { _, title in
-                        if title.count > TodoService.maxTitleLength {
-                            newTitle = String(title.prefix(TodoService.maxTitleLength))
-                        }
-                    }
-                Button {
-                    withAnimation(.easeOut(duration: 0.15)) { due = due == nil ? Self.nextHour() : nil }
-                } label: {
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 13))
-                        .foregroundColor(due == nil ? .gray : accent)
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .help(due == nil ? "Add a date and time" : "No date")
-                Button(action: submit) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 15))
-                        .foregroundColor(canAdd ? accent : .gray)
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .disabled(!canAdd)
-                .help("Add")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(Color.white.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            field
 
             if let current = due {
                 dueRow(current)
+            } else if let typed = typedDate {
+                typedDateChip(typed.date)
             }
 
             if items.isEmpty {
-                Text(emptyText)
-                    .font(.system(size: 11))
-                    .foregroundColor(.gray.opacity(0.7))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(items) { item in
-                            TodoRow(item: item, accent: accent, adder: showsAdder ? todo.adderName(of: item) : nil)
-                                .transition(.opacity)
-                        }
-                    }
+                VStack(spacing: 5) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 18))
+                        .foregroundStyle(accent.opacity(0.7))
+                    Text(emptyText)
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                    Text("Tip: type a time in it, like “besok jam 10”")
+                        .font(.system(size: 9.5))
+                        .foregroundColor(.gray.opacity(0.55))
                 }
-                .scrollIndicators(.never)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Every minute, so todos move from Today to Late as their time passes.
+                TimelineView(.everyMinute) { context in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4, pinnedViews: []) {
+                            sections(now: context.date)
+                        }
+                        .animation(.snappy(duration: 0.25), value: items)
+                    }
+                    .scrollIndicators(.never)
+                }
             }
 
             if let error = todo.actionError {
@@ -1021,6 +1063,79 @@ private struct TodoList: View {
         }
     }
 
+    // MARK: Adding
+
+    private var field: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(isFieldFocused ? accent : .gray)
+            TextField(placeholder, text: $newTitle)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .focused($isFieldFocused)
+                .onSubmit(submit)
+                .onExitCommand { newTitle = "" }
+                .onChange(of: newTitle) { _, title in
+                    if title.count > TodoService.maxTitleLength {
+                        newTitle = String(title.prefix(TodoService.maxTitleLength))
+                    }
+                    if title.isEmpty { ignoresTypedDate = false }
+                }
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    due = due == nil ? (typedDate?.date ?? TodoDates.nextHour()) : nil
+                }
+            } label: {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 13))
+                    .foregroundColor(due == nil && typedDate == nil ? .gray : accent)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(due == nil ? "Add a date and time" : "No date")
+            Button(action: submit) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(canAdd ? accent : .gray.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .disabled(!canAdd)
+            .help("Add (Return)")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(isFieldFocused ? 0.1 : 0.07))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(isFieldFocused ? accent.opacity(0.5) : .clear, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .animation(.easeOut(duration: 0.15), value: isFieldFocused)
+    }
+
+    /// The date read from the title, before the todo is added; the cross keeps the words instead.
+    private func typedDateChip(_ date: Date) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 9, weight: .semibold))
+            Text(TodoRow.dueLabel(date, now: Date()))
+                .font(.system(size: 10, weight: .semibold))
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { ignoresTypedDate = true }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Keep it in the title, without a date")
+        }
+        .foregroundColor(accent)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(accent.opacity(0.15)))
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
     /// The new todo's date and time, typed or stepped in the field (a calendar popover would sit
     /// outside the notch and close it), with quick picks.
     private func dueRow(_ current: Date) -> some View {
@@ -1030,8 +1145,9 @@ private struct TodoList: View {
                 .labelsHidden()
                 .datePickerStyle(.field)
                 .controlSize(.small)
-            quickPick("Today") { Self.nextHour() }
-            quickPick("Tomorrow") { Self.tomorrowMorning() }
+            quickPick("Today") { TodoDates.nextHour() }
+            quickPick("Tonight") { TodoDates.tonight() }
+            quickPick("Tomorrow") { TodoDates.tomorrowMorning() }
             Spacer(minLength: 0)
         }
         .transition(.opacity)
@@ -1050,26 +1166,143 @@ private struct TodoList: View {
             .fixedSize()
     }
 
+    private func submit() {
+        guard canAdd else { return }
+        if let typed = typedDate {
+            add(typed.title, typed.date)
+        } else {
+            add(newTitle, due)
+        }
+        newTitle = ""
+        ignoresTypedDate = false
+        withAnimation(.easeOut(duration: 0.15)) { due = nil }
+        isFieldFocused = true
+    }
+
+    // MARK: Sections
+
+    private enum Section: String, CaseIterable {
+        case late = "Late", today = "Today", upcoming = "Upcoming", anytime = "Anytime", done = "Done"
+
+        var icon: String {
+            switch self {
+            case .late: return "exclamationmark.circle.fill"
+            case .today: return "sun.max.fill"
+            case .upcoming: return "calendar"
+            case .anytime: return "tray.fill"
+            case .done: return "checkmark.circle.fill"
+            }
+        }
+
+        static func of(_ item: TodoService.Todo, now: Date) -> Section {
+            if item.isDone { return .done }
+            guard let dueAt = item.dueAt else { return .anytime }
+            if dueAt < now { return .late }
+            return Calendar.current.isDate(dueAt, inSameDayAs: now) ? .today : .upcoming
+        }
+    }
+
+    @ViewBuilder
+    private func sections(now: Date) -> some View {
+        let grouped = Dictionary(grouping: items) { Section.of($0, now: now) }
+        let open = Section.allCases.filter { $0 != .done && grouped[$0] != nil }
+        // A list of only undated todos needs no headings.
+        let showsHeaders = open != [.anytime] || grouped[.done] != nil
+        ForEach(Section.allCases, id: \.self) { section in
+            if let rows = grouped[section] {
+                if section == .done {
+                    doneHeader(count: rows.count)
+                    if showsDone || open.isEmpty {
+                        rowViews(rows)
+                    }
+                } else {
+                    if showsHeaders {
+                        header(section, count: rows.count)
+                    }
+                    rowViews(rows)
+                }
+            }
+        }
+    }
+
+    private func rowViews(_ rows: [TodoService.Todo]) -> some View {
+        ForEach(rows) { item in
+            TodoRow(item: item, accent: accent, adder: showsAdder ? todo.adderName(of: item) : nil)
+                .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+        }
+    }
+
+    private func header(_ section: Section, count: Int) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: section.icon)
+                .font(.system(size: 8.5, weight: .bold))
+            Text(section.rawValue.uppercased())
+                .font(.system(size: 9, weight: .bold))
+                .tracking(0.5)
+            Text("\(count)")
+                .font(.system(size: 9, weight: .semibold))
+                .opacity(0.6)
+        }
+        .foregroundColor(section == .late ? .red : section == .today ? accent : .gray)
+        .padding(.top, 4)
+        .padding(.leading, 2)
+    }
+
+    private func doneHeader(count: Int) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.25)) { showsDone.toggle() }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(showsDone ? 90 : 0))
+                Text("DONE")
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(0.5)
+                Text("\(count)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .opacity(0.6)
+                Spacer()
+            }
+            .foregroundColor(.gray)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .padding(.top, 4)
+        .padding(.leading, 2)
+        .help(showsDone ? "Hide done" : "Show done")
+    }
+}
+
+/// The times offered for a todo: when adding one, and to move one later.
+private enum TodoDates {
     /// The next full hour, like 15:00 at 14:20.
-    private static func nextHour() -> Date {
+    static func nextHour(after now: Date = Date()) -> Date {
         let calendar = Calendar.current
-        let hour = calendar.dateInterval(of: .hour, for: Date())?.start ?? Date()
-        return calendar.date(byAdding: .hour, value: 1, to: hour) ?? Date()
+        let hour = calendar.dateInterval(of: .hour, for: now)?.start ?? now
+        return calendar.date(byAdding: .hour, value: 1, to: hour) ?? now
+    }
+
+    /// Today at 19:00, or the next hour once that's past.
+    static func tonight() -> Date {
+        let now = Date()
+        let evening = Calendar.current.date(bySettingHour: 19, minute: 0, second: 0, of: now) ?? now
+        return evening > now ? evening : nextHour()
     }
 
     /// Tomorrow at 09:00.
-    private static func tomorrowMorning() -> Date {
+    static func tomorrowMorning() -> Date {
         let calendar = Calendar.current
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? Date()
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 
-    private func submit() {
-        guard canAdd else { return }
-        add(newTitle, due)
-        newTitle = ""
-        withAnimation(.easeOut(duration: 0.15)) { due = nil }
-        isFieldFocused = true
+    /// Next Monday at 09:00.
+    static func nextWeek() -> Date {
+        let calendar = Calendar.current
+        let monday = calendar.nextDate(after: Date(), matching: DateComponents(hour: 9, weekday: 2), matchingPolicy: .nextTime)
+        return monday ?? tomorrowMorning()
     }
 }
 
@@ -1109,72 +1342,243 @@ private struct TodoRow: View {
     /// The friend who added it, on a shared list.
     var adder: String?
     @State private var isHovered = false
+    @State private var isEditing = false
+    @State private var draft = ""
+    @FocusState private var isDraftFocused: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Button {
-                withAnimation(.easeOut(duration: 0.2)) { todo.toggle(item) }
-            } label: {
-                Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 14))
-                    .foregroundColor(item.isDone ? accent : .gray)
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .help(item.isDone ? "Mark as not done" : "Mark as done")
+        // Every minute, so a todo's chip turns orange when it's close and red once it's past.
+        TimelineView(.everyMinute) { context in
+            let urgency = Urgency(item, now: context.date)
+            HStack(alignment: .top, spacing: 8) {
+                checkButton
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title)
-                    .font(.system(size: 12))
-                    .strikethrough(item.isDone, color: .gray)
-                    .foregroundColor(item.isDone ? .gray : .white)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                if item.dueAt != nil || adder != nil {
-                    // Every minute, so a todo turns red once its time has passed.
-                    TimelineView(.everyMinute) { context in
-                        HStack(spacing: 3) {
+                VStack(alignment: .leading, spacing: 3) {
+                    if isEditing {
+                        editor
+                    } else {
+                        Text(item.title)
+                            .font(.system(size: 12, weight: item.isDone ? .regular : .medium))
+                            .strikethrough(item.isDone, color: .gray)
+                            .foregroundColor(item.isDone ? .gray : .white)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2, perform: startEditing)
+                            .help("Double-click to edit")
+                    }
+                    if item.dueAt != nil || adder != nil {
+                        HStack(spacing: 4) {
                             if let dueAt = item.dueAt {
-                                Image(systemName: "clock")
-                                    .font(.system(size: 8.5))
-                                Text(Self.dueLabel(dueAt, now: context.date))
+                                dueChip(dueAt, urgency: urgency, now: context.date)
                             }
                             if let adder {
-                                Text(item.dueAt == nil ? adder : "· \(adder)")
+                                Label(adder, systemImage: "person.fill")
+                                    .font(.system(size: 9.5))
+                                    .foregroundColor(.gray)
+                                    .labelStyle(TightLabelStyle())
                             }
                         }
-                        .font(.system(size: 9.5))
-                        .foregroundColor(item.isOverdue(at: context.date) ? .red : .gray)
                         .lineLimit(1)
                     }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
+                actions
+                    .opacity(isHovered && !isEditing ? 1 : 0)
+                    .allowsHitTesting(isHovered && !isEditing)
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .padding(.vertical, 7)
+            .background(Color.white.opacity(isHovered || isEditing ? 0.1 : 0.05))
+            // A stripe on the left for a todo that's late or due soon.
+            .overlay(alignment: .leading) {
+                if let color = urgency.color(accent: accent), urgency != .later {
+                    Capsule()
+                        .fill(color)
+                        .frame(width: 3)
+                        .padding(.vertical, 6)
+                        .padding(.leading, 4)
+                }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(isEditing ? accent.opacity(0.5) : .clear, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .opacity(item.isDone ? 0.6 : 1)
+            .animation(.snappy(duration: 0.2), value: isHovered)
+            .onHover { isHovered = $0 }
+            .contextMenu { menuItems }
+        }
+    }
+
+    // MARK: Editing
+
+    private var editor: some View {
+        TextField("Todo", text: $draft, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12, weight: .medium))
+            .lineLimit(1...3)
+            .focused($isDraftFocused)
+            .onSubmit(save)
+            .onExitCommand { isEditing = false }
+            .onChange(of: isDraftFocused) { _, focused in
+                if !focused && isEditing { save() }
+            }
+    }
+
+    private func startEditing() {
+        draft = item.title
+        isEditing = true
+        DispatchQueue.main.async { isDraftFocused = true }
+    }
+
+    /// Saves the new title; a time typed into it, like "besok jam 10", moves the todo there.
+    private func save() {
+        isEditing = false
+        if let typed = TodoDateParser.parse(draft), !typed.title.isEmpty {
+            todo.rename(item, to: typed.title)
+            todo.setDue(item, typed.date)
+        } else {
+            todo.rename(item, to: draft)
+        }
+    }
+
+    // MARK: Actions
+
+    /// On hover: move the todo to another time, and delete it.
+    private var actions: some View {
+        HStack(spacing: 4) {
+            if !item.isDone {
+                Menu {
+                    snoozeItems
+                } label: {
+                    actionIcon("clock.arrow.circlepath")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .pointingHandCursor()
+                .help("Move to another time")
+            }
             Button {
                 withAnimation { todo.delete(item) }
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray)
+                actionIcon("trash")
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
             .help("Delete")
-            .opacity(isHovered ? 1 : 0)
-            .allowsHitTesting(isHovered)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.white.opacity(isHovered ? 0.1 : 0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .onHover { isHovered = $0 }
+    }
+
+    private func actionIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundColor(.gray)
+            .frame(width: 20, height: 20)
+            .background(Circle().fill(Color.white.opacity(0.08)))
+    }
+
+    @ViewBuilder
+    private var snoozeItems: some View {
+        Button("In 1 Hour", systemImage: "clock") { move(to: Date().addingTimeInterval(60 * 60)) }
+        Button("Tonight (19.00)", systemImage: "moon") { move(to: TodoDates.tonight()) }
+        Button("Tomorrow (09.00)", systemImage: "sunrise") { move(to: TodoDates.tomorrowMorning()) }
+        Button("Next Week (Mon 09.00)", systemImage: "calendar") { move(to: TodoDates.nextWeek()) }
+        if item.dueAt != nil {
+            Divider()
+            Button("Remove Date", systemImage: "calendar.badge.minus") { move(to: nil) }
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        Button(item.isDone ? "Mark as Not Done" : "Mark as Done", systemImage: item.isDone ? "circle" : "checkmark.circle") {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { todo.toggle(item) }
+        }
+        Button("Edit", systemImage: "pencil", action: startEditing)
+        Button("Copy", systemImage: "doc.on.doc") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(item.title, forType: .string)
+        }
+        if !item.isDone {
+            Divider()
+            snoozeItems
+        }
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) {
+            withAnimation { todo.delete(item) }
+        }
+    }
+
+    private func move(to date: Date?) {
+        withAnimation(.snappy(duration: 0.25)) { todo.setDue(item, date) }
+    }
+
+    private var checkButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { todo.toggle(item) }
+        } label: {
+            Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 15))
+                .foregroundStyle(item.isDone ? accent : Color.gray)
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: item.isDone)
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(item.isDone ? "Mark as not done" : "Mark as done")
+    }
+
+    private func dueChip(_ dueAt: Date, urgency: Urgency, now: Date) -> some View {
+        let color = urgency.color(accent: accent) ?? .gray
+        return HStack(spacing: 3) {
+            Image(systemName: urgency == .late ? "exclamationmark.circle.fill" : "clock")
+                .font(.system(size: 8.5, weight: .semibold))
+            Text(Self.dueLabel(dueAt, now: now))
+        }
+        .font(.system(size: 9.5, weight: .semibold))
+        .foregroundColor(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1.5)
+        .background(Capsule().fill(color.opacity(0.15)))
+    }
+
+    /// How close an open todo is to its time, for its chip and stripe.
+    enum Urgency {
+        case none, late, soon, today, later
+
+        init(_ item: TodoService.Todo, now: Date) {
+            guard let dueAt = item.dueAt, !item.isDone else { self = .none; return }
+            if dueAt < now {
+                self = .late
+            } else if dueAt.timeIntervalSince(now) <= 60 * 60 {
+                self = .soon
+            } else if Calendar.current.isDate(dueAt, inSameDayAs: now) {
+                self = .today
+            } else {
+                self = .later
+            }
+        }
+
+        func color(accent: Color) -> Color? {
+            switch self {
+            case .none: return nil
+            case .late: return .red
+            case .soon: return .orange
+            case .today: return accent
+            case .later: return .gray
+            }
+        }
     }
 
     /// "Today 14.00", "Tomorrow 09.00", "Fri 8 Nov 10.00", with the year when it isn't this one.
     static func dueLabel(_ date: Date, now: Date) -> String {
         let calendar = Calendar.current
         let time = date.formatted(.dateTime.hour().minute())
+        let minutes = Int((date.timeIntervalSince(now) / 60).rounded(.up))
+        if minutes > 0 && minutes <= 60 { return "in \(minutes) min" }
+        if minutes <= 0 && minutes > -60 { return minutes == 0 ? "now" : "\(-minutes) min late" }
         if calendar.isDate(date, inSameDayAs: now) { return "Today \(time)" }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
             return "Tomorrow \(time)"
@@ -1187,6 +1591,16 @@ private struct TodoRow: View {
             ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
             : date.formatted(.dateTime.day().month(.abbreviated).year())
         return "\(day) \(time)"
+    }
+}
+
+/// An icon and its title close together, for the small details under a todo.
+private struct TightLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.font(.system(size: 8))
+            configuration.title
+        }
     }
 }
 
@@ -3673,6 +4087,7 @@ private struct PokeView: View {
 
 private struct PokeSetupView: View {
     @EnvironmentObject var poke: PokeService
+    @EnvironmentObject var layout: IslandLayout
     @State private var projectURL = ""
     @State private var anonKey = ""
 
@@ -3686,7 +4101,7 @@ private struct PokeSetupView: View {
                     .foregroundColor(.gray)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(width: 220, alignment: .leading)
+            .frame(width: layout.wide(220, 300), alignment: .leading)
 
             VStack(alignment: .leading, spacing: 6) {
                 PokeTextField(placeholder: "Project URL (https://….supabase.co)", text: $projectURL)
