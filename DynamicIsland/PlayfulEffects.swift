@@ -19,6 +19,9 @@ final class FaceMood: ObservableObject {
     @Published private(set) var isDrowsy = false
     @Published private(set) var isAsleep = false
     @Published private(set) var isLookingAtBadge = false
+    /// While the pointer is near, which way it is from the face, -1 (left) to 1 (right), in half
+    /// steps, so the eyes follow it without a change on every move.
+    @Published private(set) var pointerSide: CGFloat = 0
 
     /// No keyboard or mouse for this long, and the face gets drowsy, then falls asleep.
     private let drowsyAfter: TimeInterval = 60
@@ -31,6 +34,8 @@ final class FaceMood: ObservableObject {
     private var idleTimer: Timer?
     private var watchers = 0
     private var nearRect = CGRect.zero
+    /// Where the face is across the screen, in the left wing.
+    private var faceX: CGFloat = 0
 
     func surprise() {
         surpriseTask?.cancel()
@@ -62,6 +67,7 @@ final class FaceMood: ObservableObject {
             let width = notchSize.width + IslandLayout.notchWing * 2 + 180
             let height = notchSize.height + 70
             nearRect = CGRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
+            faceX = screen.frame.midX - notchSize.width / 2 - IslandLayout.notchWing / 2
         }
         guard monitors.isEmpty else { return }
         pointerMoved()
@@ -94,9 +100,16 @@ final class FaceMood: ObservableObject {
 
     /// Publishes only when the pointer crosses into or out of the area, not on every move.
     private func pointerMoved() {
-        let near = nearRect.contains(NSEvent.mouseLocation)
+        let location = NSEvent.mouseLocation
+        let near = nearRect.contains(location)
         if near != isPointerNear {
             isPointerNear = near
+        }
+        if near {
+            let side = ((max(-1, min(1, (location.x - faceX) / 80))) * 2).rounded() / 2
+            if side != pointerSide {
+                pointerSide = side
+            }
         }
         wake()
     }
@@ -132,6 +145,8 @@ struct NotchEyes: View {
     @State private var isYawnOpen = false
     @State private var hop: CGFloat = 0
     @State private var sway: Double = 0
+    /// The snowman's right arm, waving while the pointer is near.
+    @State private var wave: Double = 0
 
     private let size: CGFloat = 7
     private let gap: CGFloat = 5
@@ -164,43 +179,160 @@ struct NotchEyes: View {
         action == nil && !mood.isSurprised && !mood.isAsleep && !mood.isLookingAtBadge
     }
 
+    /// Where the eyes look, -1 to 1: at the badge, at the pointer while it's near, or around.
+    private var gaze: CGFloat {
+        if mood.isAsleep { return 0 }
+        if mood.isLookingAtBadge { return 1 }
+        if mood.isPointerNear { return mood.pointerSide }
+        return look
+    }
+
     var body: some View {
         let expression = expression
-        let eyesX = (mood.isLookingAtBadge && !mood.isAsleep ? 1 : look) * reach
-        ZStack {
-            HStack(spacing: gap) {
-                eye(expression, closed: isLeftClosed)
-                eye(expression, closed: isRightClosed)
+        let gaze = gaze
+        Group {
+            if layout.christmas {
+                snowman(expression, gaze: gaze)
+            } else {
+                ZStack {
+                    HStack(spacing: gap) {
+                        eye(expression, closed: isLeftClosed)
+                        eye(expression, closed: isRightClosed)
+                    }
+                    .offset(x: gaze * reach)
+                    mouth(expression)
+                        .offset(y: 8)
+                }
+                .frame(width: 26, height: 24)
             }
-            .offset(x: eyesX)
-            mouth(expression)
-                .offset(y: 8)
         }
-        .frame(width: 26, height: 24)
         .overlay(alignment: .topTrailing) {
             if expression == .asleep {
-                SleepyZ(color: color).offset(x: 6, y: -2)
+                SleepyZ(color: accent).offset(x: 6, y: -2)
             }
         }
         .overlay(alignment: .topTrailing) {
             if expression == .humming {
-                FloatingNote(color: color).offset(x: 7, y: -1)
+                FloatingNote(color: accent).offset(x: 7, y: -1)
             }
         }
         .rotationEffect(.degrees(sway), anchor: .bottom)
         .offset(y: hop + (isBreathingIn ? -0.7 : 0.5))
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: expression)
-        .animation(.easeInOut(duration: 0.25), value: eyesX)
+        .animation(.easeInOut(duration: 0.25), value: gaze)
         .onAppear { mood.startWatching(notchSize: layout.notchSize) }
         .onDisappear { mood.stopWatching() }
         .task { await breathe() }
         .task { await blink() }
         .task { await glance() }
         .task { await act() }
+        .task(id: layout.christmas && mood.isPointerNear && !mood.isAsleep) { await waveWhileNear() }
         .allowsHitTesting(false)
     }
 
+    /// The z and the note: white beside the snowman.
+    private var accent: Color {
+        layout.christmas ? .white : color
+    }
+
+    // MARK: Snowman
+
+    /// At Christmas the face is a snowman's: coal eyes and mouth on a snowball, a carrot nose that
+    /// turns where he looks, a top hat that jumps when he's surprised and slips when he's sleepy,
+    /// a red scarf, and a stick arm that waves at the pointer.
+    private func snowman(_ expression: Expression, gaze: CGFloat) -> some View {
+        let snow = Color(white: 0.95)
+        let coal = Color(white: 0.1)
+        let red = Color(red: 0.9, green: 0.16, blue: 0.2)
+        let stick = Color(red: 0.62, green: 0.42, blue: 0.25)
+        let hatLift: CGFloat = expression == .surprised ? -4 : 0
+        let hatTilt: Double = expression == .asleep ? -18 : expression == .drowsy ? -9 : 0
+        return ZStack(alignment: .top) {
+            // Arms behind the body: the left one still, the right one waving.
+            Capsule()
+                .fill(stick)
+                .frame(width: 7, height: 1.4)
+                .rotationEffect(.degrees(25), anchor: .trailing)
+                .offset(x: -8, y: 19)
+            Capsule()
+                .fill(stick)
+                .frame(width: 7, height: 1.4)
+                .rotationEffect(.degrees(-25 + wave), anchor: .leading)
+                .offset(x: 8, y: 19)
+            // The body with two coal buttons.
+            Circle()
+                .fill(snow)
+                .frame(width: 14, height: 14)
+                .offset(y: 15)
+            VStack(spacing: 2.4) {
+                Circle().fill(coal).frame(width: 1.6, height: 1.6)
+                Circle().fill(coal).frame(width: 1.6, height: 1.6)
+            }
+            .offset(y: 20)
+            // The head: eyes, mouth and the carrot.
+            Circle()
+                .fill(snow)
+                .frame(width: 13, height: 13)
+                .offset(y: 4)
+            HStack(spacing: 3) {
+                eye(expression, closed: isLeftClosed, size: 2.6, color: coal)
+                eye(expression, closed: isRightClosed, size: 2.6, color: coal)
+            }
+            .offset(x: gaze * 1.4, y: 8)
+            Carrot()
+                .fill(Color.orange)
+                .frame(width: 5, height: 2.4)
+                .scaleEffect(x: gaze < 0 ? -1 : 1)
+                .offset(x: gaze < 0 ? -2.5 + gaze : 2.5 + gaze, y: 10.4)
+            mouth(expression, color: coal)
+                .scaleEffect(0.5)
+                .offset(y: 11.5)
+            // The scarf, an end hanging down.
+            Capsule()
+                .fill(red)
+                .frame(width: 12, height: 2.4)
+                .offset(y: 15.6)
+            RoundedRectangle(cornerRadius: 0.8)
+                .fill(red)
+                .frame(width: 2, height: 4.5)
+                .offset(x: 3.5, y: 16.5)
+            // The hat.
+            VStack(spacing: 0) {
+                ZStack(alignment: .bottom) {
+                    Rectangle().fill(coal).frame(width: 7, height: 5)
+                    Rectangle().fill(red).frame(width: 7, height: 1.2).offset(y: -0.8)
+                }
+                Capsule().fill(coal).frame(width: 12, height: 1.6)
+            }
+            .rotationEffect(.degrees(hatTilt), anchor: .bottom)
+            .offset(y: -1.6 + hatLift)
+        }
+        .frame(width: 26, height: 30, alignment: .top)
+    }
+
+    /// Waves a few times when the pointer comes near, then now and then while it stays.
+    private func waveWhileNear() async {
+        guard layout.christmas && mood.isPointerNear && !mood.isAsleep else {
+            withAnimation(.easeOut(duration: 0.2)) { wave = 0 }
+            return
+        }
+        while !Task.isCancelled {
+            for _ in 0..<3 {
+                withAnimation(.easeInOut(duration: 0.16)) { wave = -40 }
+                try? await Task.sleep(for: .milliseconds(160))
+                withAnimation(.easeInOut(duration: 0.16)) { wave = -10 }
+                try? await Task.sleep(for: .milliseconds(160))
+            }
+            withAnimation(.easeOut(duration: 0.2)) { wave = 0 }
+            try? await Task.sleep(for: .seconds(2.5))
+        }
+    }
+
     private func eye(_ expression: Expression, closed: Bool) -> some View {
+        eye(expression, closed: closed, size: size, color: color)
+    }
+
+    private func eye(_ expression: Expression, closed: Bool, size: CGFloat, color: Color) -> some View {
         let openness: CGFloat = switch expression {
         case .asleep, .yawning: 0.14
         case .drowsy: 0.5
@@ -216,8 +348,12 @@ struct NotchEyes: View {
             .scaleEffect(x: 1, y: closed && openness > 0.2 ? 0.12 : openness)
     }
 
-    @ViewBuilder
     private func mouth(_ expression: Expression) -> some View {
+        mouth(expression, color: color)
+    }
+
+    @ViewBuilder
+    private func mouth(_ expression: Expression, color: Color) -> some View {
         switch expression {
         case .grinning, .happy:
             Smile()
@@ -368,6 +504,18 @@ private struct FloatingNote: View {
                     isFloating = true
                 }
             }
+    }
+}
+
+/// A carrot nose pointing right: wide at the face, a point at the tip.
+private struct Carrot: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 

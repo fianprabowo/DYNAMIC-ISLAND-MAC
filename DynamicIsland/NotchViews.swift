@@ -30,12 +30,12 @@ struct NotchIslandView: View {
                     .modifier(ShakeEffect(shakes: pokeShakes))
             }
             // The eyes live in the wings, so with them on the wings stay out.
-            .onChange(of: hasActivity || layout.showsEyes, initial: true) { _, show in
+            .onChange(of: hasActivity || layout.showsFace, initial: true) { _, show in
                 layout.setShowsWings(show)
             }
             .onChange(of: notificationManager.banner?.id) {
                 layout.setShowsBanner(notificationManager.banner != nil)
-                if layout.showsEyes, notificationManager.banner?.pokeSenderID != nil {
+                if layout.showsFace, notificationManager.banner?.pokeSenderID != nil {
                     FaceMood.shared.surprise()
                 }
                 if layout.pokeEffects, let banner = notificationManager.banner, banner.pokeSenderID != nil {
@@ -46,7 +46,7 @@ struct NotchIslandView: View {
                 }
             }
             .onChange(of: notificationManager.unreadCount) { previous, count in
-                if layout.showsEyes && count > previous {
+                if layout.showsFace && count > previous {
                     FaceMood.shared.lookAtBadge()
                 }
             }
@@ -130,7 +130,7 @@ struct NotchIslandView: View {
     /// The face peeks out of the left wing while standing by; anything
     /// running takes its place.
     private var showsFace: Bool {
-        layout.showsEyes && isStandingBy
+        layout.showsFace && isStandingBy
     }
 
     /// The meeting's icon is on the left only when nothing else is live.
@@ -177,7 +177,7 @@ struct NotchIslandView: View {
                     Image(systemName: "music.note")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(Color(themeManager.currentTheme.accentColor))
-                } else if layout.showsEyes && (notificationManager.unreadCount > 0 || !vpnManager.isConnected) {
+                } else if layout.showsFace && (notificationManager.unreadCount > 0 || !vpnManager.isConnected) {
                     // Unread notifications, even with the VPN on: the face watches the badge.
                     NotchEyes()
                 } else if vpnManager.isConnected {
@@ -699,6 +699,12 @@ private struct NotchExpandedView: View {
             .padding(.bottom, IslandLayout.expandedBottomPadding)
             .frame(maxHeight: .infinity)
             .opacity(layout.isResizing ? 0 : 1)
+        }
+        .background {
+            if layout.christmas {
+                ChristmasBackdrop(isPaused: layout.isResizing)
+                    .opacity(layout.isResizing ? 0 : 1)
+            }
         }
         .overlay(alignment: .bottom) {
             ZStack { bannerToast }
@@ -2053,6 +2059,7 @@ private struct SettingsMenu: View {
             Menu("Animations") {
                 Toggle("Eyes Beside the Notch", isOn: $layout.showsEyes)
                 Toggle("Poke Effects", isOn: $layout.pokeEffects)
+                Toggle("Christmas Snow & Snowman", isOn: $layout.christmas)
             }
             soundMenu(.poke, selection: $pokeSound)
             soundMenu(.todo, selection: $todoSound)

@@ -48,6 +48,15 @@ class IslandLayout: ObservableObject {
     @Published var pokeEffects: Bool {
         didSet { UserDefaults.standard.set(pokeEffects, forKey: Self.pokeEffectsKey) }
     }
+    /// Snow and a snowman in the open notch (gear menu → Animations). Unless switched by hand,
+    /// it is on through December.
+    @Published var christmas: Bool {
+        didSet { UserDefaults.standard.set(christmas, forKey: Self.christmasKey) }
+    }
+    /// The face beside the notch: the eyes, or at Christmas the snowman.
+    var showsFace: Bool {
+        showsEyes || christmas
+    }
     /// The open notch wider and taller than usual, for more room (the arrows beside the pin).
     @Published private(set) var isWide: Bool {
         didSet { UserDefaults.standard.set(isWide, forKey: Self.wideKey) }
@@ -119,6 +128,7 @@ class IslandLayout: ObservableObject {
     private static let showsEyesKey = "islandShowsEyes"
     private static let pokeEffectsKey = "islandPokeEffects"
     private static let wideKey = "islandWide"
+    private static let christmasKey = "islandChristmas"
 
     init() {
         isPinnedToNotch = UserDefaults.standard.object(forKey: Self.pinnedKey) as? Bool ?? true
@@ -126,6 +136,8 @@ class IslandLayout: ObservableObject {
         showsEyes = UserDefaults.standard.object(forKey: Self.showsEyesKey) as? Bool ?? true
         pokeEffects = UserDefaults.standard.object(forKey: Self.pokeEffectsKey) as? Bool ?? true
         isWide = UserDefaults.standard.bool(forKey: Self.wideKey)
+        christmas = UserDefaults.standard.object(forKey: Self.christmasKey) as? Bool
+            ?? (Calendar.current.component(.month, from: Date()) == 12)
         notchSize = Self.measureNotch()
     }
 
