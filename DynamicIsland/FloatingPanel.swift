@@ -48,15 +48,21 @@ class IslandLayout: ObservableObject {
     @Published var pokeEffects: Bool {
         didSet { UserDefaults.standard.set(pokeEffects, forKey: Self.pokeEffectsKey) }
     }
-    /// Snow and a snowman in the open notch (gear menu → Animations). Unless switched by hand,
-    /// it is on through December.
-    @Published var christmas: Bool {
-        didSet { UserDefaults.standard.set(christmas, forKey: Self.christmasKey) }
+    /// Which season's look the notch has (gear menu → Animations → Season): by the date, none,
+    /// or one picked by hand.
+    @Published var seasonSetting: SeasonSetting {
+        didSet { UserDefaults.standard.set(seasonSetting.rawValue, forKey: Self.seasonKey) }
     }
-    /// The face beside the notch: the eyes, or at Christmas the snowman.
+    /// The season showing now. By the date it changes at midnight (see `init`).
+    var season: Season? {
+        seasonSetting.season(on: Date())
+    }
+    /// The face beside the notch: the eyes, or in a season the eyes dressed up for it (the
+    /// snowman at Christmas), which show even with the eyes turned off.
     var showsFace: Bool {
-        showsEyes || christmas
+        showsEyes || season != nil
     }
+    private var dayObservers: [Any] = []
     /// The open notch wider and taller than usual, for more room (the arrows beside the pin).
     @Published private(set) var isWide: Bool {
         didSet { UserDefaults.standard.set(isWide, forKey: Self.wideKey) }
@@ -128,7 +134,7 @@ class IslandLayout: ObservableObject {
     private static let showsEyesKey = "islandShowsEyes"
     private static let pokeEffectsKey = "islandPokeEffects"
     private static let wideKey = "islandWide"
-    private static let christmasKey = "islandChristmas"
+    private static let seasonKey = "islandSeason"
 
     init() {
         isPinnedToNotch = UserDefaults.standard.object(forKey: Self.pinnedKey) as? Bool ?? true
@@ -136,9 +142,16 @@ class IslandLayout: ObservableObject {
         showsEyes = UserDefaults.standard.object(forKey: Self.showsEyesKey) as? Bool ?? true
         pokeEffects = UserDefaults.standard.object(forKey: Self.pokeEffectsKey) as? Bool ?? true
         isWide = UserDefaults.standard.bool(forKey: Self.wideKey)
-        christmas = UserDefaults.standard.object(forKey: Self.christmasKey) as? Bool
-            ?? (Calendar.current.component(.month, from: Date()) == 12)
+        seasonSetting = UserDefaults.standard.string(forKey: Self.seasonKey).flatMap(SeasonSetting.init) ?? .byDate
         notchSize = Self.measureNotch()
+        // A new day can start a season or end one: after midnight, or waking up on a later day.
+        let refresh: (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.objectWillChange.send() }
+        }
+        dayObservers = [
+            NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main, using: refresh),
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: refresh),
+        ]
     }
 
     var notchCollapsedSize: CGSize {

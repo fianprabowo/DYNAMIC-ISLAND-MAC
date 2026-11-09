@@ -145,8 +145,10 @@ struct NotchEyes: View {
     @State private var isYawnOpen = false
     @State private var hop: CGFloat = 0
     @State private var sway: Double = 0
-    /// The snowman's right arm, waving while the pointer is near.
+    /// While the pointer is near: the snowman's right arm waving, the ketupat swinging.
     @State private var wave: Double = 0
+    /// Each step pops confetti from the New Year party hat.
+    @State private var confetti = 0
 
     private let size: CGFloat = 7
     private let gap: CGFloat = 5
@@ -190,8 +192,9 @@ struct NotchEyes: View {
     var body: some View {
         let expression = expression
         let gaze = gaze
+        let season = layout.season
         Group {
-            if layout.christmas {
+            if season == .christmas {
                 snowman(expression, gaze: gaze)
             } else {
                 ZStack {
@@ -202,8 +205,24 @@ struct NotchEyes: View {
                     .offset(x: gaze * reach)
                     mouth(expression)
                         .offset(y: 8)
+                    if let season {
+                        hat(for: season, expression: expression, gaze: gaze)
+                    }
                 }
                 .frame(width: 26, height: 24)
+                .overlay(alignment: .topLeading) {
+                    if season == .lebaran {
+                        HangingKetupat()
+                            .rotationEffect(.degrees(wave * 0.8), anchor: .top)
+                            .offset(x: -5, y: 1)
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if season == .newYear {
+                        ConfettiPop(trigger: confetti)
+                            .offset(y: -15)
+                    }
+                }
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -226,13 +245,40 @@ struct NotchEyes: View {
         .task { await blink() }
         .task { await glance() }
         .task { await act() }
-        .task(id: layout.christmas && mood.isPointerNear && !mood.isAsleep) { await waveWhileNear() }
+        .task(id: layout.season != nil && mood.isPointerNear && !mood.isAsleep) { await waveWhileNear() }
+        .onChange(of: mood.isSurprised) { _, surprised in
+            if surprised && layout.season == .newYear { confetti += 1 }
+        }
         .allowsHitTesting(false)
     }
 
     /// The z and the note: white beside the snowman.
     private var accent: Color {
-        layout.christmas ? .white : color
+        layout.season == .christmas ? .white : color
+    }
+
+    // MARK: Seasons
+
+    /// A New Year party hat or a Lebaran peci on the eyes. It jumps when the face is surprised
+    /// and slips when it is sleepy, and leans a little where the eyes look.
+    @ViewBuilder
+    private func hat(for season: Season, expression: Expression, gaze: CGFloat) -> some View {
+        let lift: CGFloat = expression == .surprised ? -4 : 0
+        let tilt: Double = expression == .asleep ? -20 : expression == .drowsy ? -10 : 0
+        switch season {
+        case .newYear:
+            PartyHat()
+                .frame(width: 10, height: 11)
+                .rotationEffect(.degrees(12 + tilt + Double(gaze) * 6), anchor: .bottom)
+                .offset(x: 2 + gaze, y: -9.5 + lift)
+        case .lebaran:
+            Peci()
+                .frame(width: 15, height: 5.5)
+                .rotationEffect(.degrees(tilt), anchor: .bottom)
+                .offset(x: gaze * 0.8, y: -6.5 + lift)
+        case .christmas:
+            EmptyView()
+        }
     }
 
     // MARK: Snowman
@@ -245,6 +291,8 @@ struct NotchEyes: View {
         let coal = Color(white: 0.1)
         let red = Color(red: 0.9, green: 0.16, blue: 0.2)
         let stick = Color(red: 0.62, green: 0.42, blue: 0.25)
+        // Lighter than coal, or the hat would vanish into the black notch.
+        let hat = Color(white: 0.32)
         let hatLift: CGFloat = expression == .surprised ? -4 : 0
         let hatTilt: Double = expression == .asleep ? -18 : expression == .drowsy ? -9 : 0
         return ZStack(alignment: .top) {
@@ -299,10 +347,10 @@ struct NotchEyes: View {
             // The hat.
             VStack(spacing: 0) {
                 ZStack(alignment: .bottom) {
-                    Rectangle().fill(coal).frame(width: 7, height: 5)
+                    Rectangle().fill(hat).frame(width: 7, height: 5)
                     Rectangle().fill(red).frame(width: 7, height: 1.2).offset(y: -0.8)
                 }
-                Capsule().fill(coal).frame(width: 12, height: 1.6)
+                Capsule().fill(hat).frame(width: 12, height: 1.6)
             }
             .rotationEffect(.degrees(hatTilt), anchor: .bottom)
             .offset(y: -1.6 + hatLift)
@@ -312,11 +360,16 @@ struct NotchEyes: View {
 
     /// Waves a few times when the pointer comes near, then now and then while it stays.
     private func waveWhileNear() async {
-        guard layout.christmas && mood.isPointerNear && !mood.isAsleep else {
+        guard let season = layout.season, mood.isPointerNear, !mood.isAsleep else {
             withAnimation(.easeOut(duration: 0.2)) { wave = 0 }
             return
         }
         while !Task.isCancelled {
+            if season == .newYear {
+                confetti += 1
+                try? await Task.sleep(for: .seconds(2.5))
+                continue
+            }
             for _ in 0..<3 {
                 withAnimation(.easeInOut(duration: 0.16)) { wave = -40 }
                 try? await Task.sleep(for: .milliseconds(160))
@@ -504,6 +557,120 @@ private struct FloatingNote: View {
                     isFloating = true
                 }
             }
+    }
+}
+
+/// A striped party cone with a pompom.
+private struct PartyHat: View {
+    var body: some View {
+        let cone = Cone()
+        ZStack(alignment: .top) {
+            cone.fill(LinearGradient(colors: [Color(red: 1, green: 0.35, blue: 0.6), Color(red: 0.6, green: 0.35, blue: 1)],
+                                     startPoint: .top, endPoint: .bottom))
+            // Gold stripes across it, kept inside the cone.
+            VStack(spacing: 2.2) {
+                ForEach(0..<3, id: \.self) { _ in
+                    Rectangle().fill(Color(red: 1, green: 0.85, blue: 0.3)).frame(height: 1)
+                }
+            }
+            .padding(.top, 3.5)
+            .mask(cone)
+            Circle()
+                .fill(Color(red: 1, green: 0.85, blue: 0.3))
+                .frame(width: 3.2, height: 3.2)
+                .offset(y: -1.6)
+        }
+    }
+
+    private struct Cone: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.closeSubpath()
+            return path
+        }
+    }
+}
+
+/// A black velvet peci, lit at the edge so it shows on the black notch, with a gold band.
+private struct Peci: View {
+    var body: some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 2.5, bottomLeadingRadius: 0.5, bottomTrailingRadius: 0.5, topTrailingRadius: 2.5)
+        shape
+            .fill(LinearGradient(colors: [Color(white: 0.38), Color(white: 0.2)], startPoint: .top, endPoint: .bottom))
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color(red: 0.95, green: 0.78, blue: 0.35))
+                    .frame(height: 0.9)
+                    .padding(.bottom, 1)
+            }
+            .overlay(shape.stroke(Color.white.opacity(0.25), lineWidth: 0.5))
+    }
+}
+
+/// A little ketupat on a string, hung beside the face at Lebaran.
+private struct HangingKetupat: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Color(red: 1, green: 0.84, blue: 0.4).opacity(0.7))
+                .frame(width: 0.6, height: 4)
+            ZStack {
+                Rectangle()
+                    .fill(Color(red: 0.25, green: 0.7, blue: 0.36))
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 2.5))
+                    path.addLine(to: CGPoint(x: 5, y: 2.5))
+                    path.move(to: CGPoint(x: 2.5, y: 0))
+                    path.addLine(to: CGPoint(x: 2.5, y: 5))
+                }
+                .stroke(Color(red: 1, green: 0.84, blue: 0.4), lineWidth: 0.6)
+            }
+            .frame(width: 5, height: 5)
+            .rotationEffect(.degrees(45))
+            .padding(.top, 1)
+        }
+    }
+}
+
+/// Confetti bursting out and falling, once each time `trigger` changes.
+private struct ConfettiPop: View {
+    let trigger: Int
+
+    var body: some View {
+        Color.clear
+            .frame(width: 36, height: 30)
+            .keyframeAnimator(initialValue: 1.0, trigger: trigger) { content, progress in
+                content.overlay { ConfettiBurst(progress: progress) }
+            } keyframes: { _ in
+                MoveKeyframe(0)
+                LinearKeyframe(1, duration: 1)
+            }
+    }
+}
+
+private struct ConfettiBurst: View {
+    let progress: Double
+
+    private static let colors: [Color] = [.yellow, .pink, .cyan, .green, .orange, .purple]
+
+    var body: some View {
+        Canvas { canvas, size in
+            guard progress < 1 else { return }
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let spread = 13 * (1 - pow(1 - progress, 2))
+            for index in 0..<12 {
+                let angle = Double(index) / 12 * 2 * .pi + 0.3
+                let point = CGPoint(x: center.x + cos(angle) * spread, y: center.y + sin(angle) * spread * 0.7 + 10 * progress * progress)
+                var piece = canvas
+                piece.translateBy(x: point.x, y: point.y)
+                piece.rotate(by: .radians(angle + progress * 6))
+                piece.fill(Path(CGRect(x: -1, y: -0.6, width: 2, height: 1.2)),
+                           with: .color(Self.colors[index % Self.colors.count].opacity(1 - progress)))
+            }
+        }
     }
 }
 

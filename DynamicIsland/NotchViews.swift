@@ -701,8 +701,8 @@ private struct NotchExpandedView: View {
             .opacity(layout.isResizing ? 0 : 1)
         }
         .background {
-            if layout.christmas {
-                ChristmasBackdrop(isPaused: layout.isResizing)
+            if let season = layout.season {
+                SeasonalBackdrop(season: season, isPaused: layout.isResizing)
                     .opacity(layout.isResizing ? 0 : 1)
             }
         }
@@ -2059,7 +2059,11 @@ private struct SettingsMenu: View {
             Menu("Animations") {
                 Toggle("Eyes Beside the Notch", isOn: $layout.showsEyes)
                 Toggle("Poke Effects", isOn: $layout.pokeEffects)
-                Toggle("Christmas Snow & Snowman", isOn: $layout.christmas)
+                Picker("Season", selection: $layout.seasonSetting) {
+                    ForEach(SeasonSetting.allCases, id: \.self) { setting in
+                        Text(seasonTitle(setting)).tag(setting)
+                    }
+                }
             }
             soundMenu(.poke, selection: $pokeSound)
             soundMenu(.todo, selection: $todoSound)
@@ -2087,6 +2091,12 @@ private struct SettingsMenu: View {
         .fixedSize()
         .tint(.gray)
         .onAppear(perform: AlertSound.previewOnHover)
+    }
+
+    /// By the date, it says which season that is now, if any.
+    private func seasonTitle(_ setting: SeasonSetting) -> String {
+        guard setting == .byDate else { return setting.title }
+        return "\(setting.title) (\(Season.current(on: Date())?.rawValue ?? "none now"))"
     }
 
     /// Resting on a sound plays it, and so does picking one; your own sounds (in ~/Library/Sounds) come first.
