@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import IOSurface
+import OSLog
 import ScreenCaptureKit
 import SwiftUI
 
@@ -20,14 +21,22 @@ final class MeetWindowCapture: NSObject {
         let layer = CALayer()
         layer.contentsGravity = .resizeAspect
         layer.backgroundColor = NSColor.black.cgColor
+        // A new frame replaces the last one at once; Core Animation would otherwise fade between
+        // them for a quarter of a second, so the picture lagged and smeared.
+        layer.actions = ["contents": NSNull()]
         return layer
     }()
+
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "DynamicIsland", category: "Meet")
+    /// How long frames took from Chrome's window to the notch, logged every few seconds.
+    private var delays: [Double] = []
+    private var lastReport = Date()
 
     private var stream: SCStream?
     private let queue = DispatchQueue(label: "MeetWindowCapture")
 
     private static let maxPixelWidth: CGFloat = 1280
-    private static let framesPerSecond: Int32 = 15
+    private static let framesPerSecond: Int32 = 30
 
     /// Starts recording the Chrome window whose title starts with `tabTitle`.
     func start(tabTitle: String, browserBarHeight: Double) async -> Problem? {
@@ -55,6 +64,7 @@ final class MeetWindowCapture: NSObject {
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: Self.framesPerSecond)
         configuration.showsCursor = false
         configuration.queueDepth = 3
+        Self.logger.info("Capture started: \(configuration.width)×\(configuration.height) at \(Self.framesPerSecond) fps")
 
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         do {
@@ -83,9 +93,27 @@ extension MeetWindowCapture: SCStreamOutput, SCStreamDelegate {
               let rawStatus = attachments.first?[.status] as? Int, rawStatus == SCFrameStatus.complete.rawValue,
               let pixelBuffer = sampleBuffer.imageBuffer,
               let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue() else { return }
+        let captured = sampleBuffer.presentationTimeStamp
         DispatchQueue.main.async { [weak self] in
-            self?.layer.contents = surface
+            self?.show(surface, capturedAt: captured)
         }
+    }
+
+    /// Shows the frame, and every 5 seconds logs the frames shown and their delay.
+    private func show(_ surface: IOSurface, capturedAt captured: CMTime) {
+        layer.contents = surface
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
+        let delay = CMTimeGetSeconds(CMTimeSubtract(now, captured))
+        if delay.isFinite && delay >= 0 {
+            delays.append(delay * 1000)
+        }
+        let elapsed = Date().timeIntervalSince(lastReport)
+        guard elapsed >= 5, !delays.isEmpty else { return }
+        let average = delays.reduce(0, +) / Double(delays.count)
+        let worst = delays.max() ?? 0
+        Self.logger.info("Meet picture: \(String(format: "%.1f", Double(self.delays.count) / elapsed)) fps, delay avg \(Int(average)) ms, worst \(Int(worst)) ms")
+        delays = []
+        lastReport = Date()
     }
 
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
