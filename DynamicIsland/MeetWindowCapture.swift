@@ -111,7 +111,7 @@ extension MeetWindowCapture: SCStreamOutput, SCStreamDelegate {
         guard elapsed >= 5, !delays.isEmpty else { return }
         let average = delays.reduce(0, +) / Double(delays.count)
         let worst = delays.max() ?? 0
-        Self.logger.info("Meet picture: \(String(format: "%.1f", Double(self.delays.count) / elapsed)) fps, delay avg \(Int(average)) ms, worst \(Int(worst)) ms")
+        Self.logger.info("Meet picture: \(String(format: "%.1f", Double(self.delays.count) / elapsed), privacy: .public) fps, delay avg \(Int(average)) ms, worst \(Int(worst)) ms")
         delays = []
         lastReport = Date()
     }
