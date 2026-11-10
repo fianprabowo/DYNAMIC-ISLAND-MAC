@@ -1,0 +1,24 @@
+README.md
+  s_8d4b63dc56ae38::t_e63ac94b34c00a 19,21
+DynamicIsland/ClaudeUsageMonitor.swift
+  s_8d4b63dc56ae38::t_ccf20cb334fb9d 16
+  s_8d4b63dc56ae38::t_1f364d84c6c054 63-120
+DynamicIsland/NotchViews.swift
+  s_8d4b63dc56ae38::t_8ebfd6982b33b3 416-420
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "521c3c507818ab89676a54c0c18485749d94494a",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
