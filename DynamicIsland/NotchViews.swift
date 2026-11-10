@@ -413,6 +413,11 @@ private struct NotchBannerView: View {
             layout.selectedTab = .todo
             layout.expand()
             notificationManager.dismissBanner()
+        } else if notification.type == .claude && notification.url == nil && notification.appURL == nil {
+            // The weekly limit's reminder opens the Nook, which shows the limits.
+            layout.selectedTab = .nook
+            layout.expand()
+            notificationManager.dismissBanner()
         } else {
             notification.open()
             notificationManager.dismissBanner()

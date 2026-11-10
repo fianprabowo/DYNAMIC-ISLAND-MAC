@@ -13,6 +13,7 @@ class ClaudeUsageMonitor: ObservableObject {
     @Published private(set) var snapshot = ClaudeUsageSnapshot()
 
     private let scanner = ClaudeLogScanner()
+    private let weekEndReminder = ClaudeWeekEndReminder()
     private var scanTask: Task<Void, Never>?
     private var limitsTask: Task<Void, Never>?
     /// The latest scan of the transcripts, before the live limits are put in.
@@ -59,6 +60,64 @@ class ClaudeUsageMonitor: ObservableObject {
             snapshot.weeklyLimit = live.weekly.current(at: now)
         }
         self.snapshot = snapshot
+        weekEndReminder.check(snapshot.weeklyLimit, at: now)
+    }
+}
+
+/// On the last day of the plan's week, a banner every hour from 9:00 until the weekly limit
+/// resets, while some of it is left: what isn't used by then is gone. When the week resets
+/// before 9:00, the reminders start at 9:00 the day before.
+///
+/// It's checked on every scan (every few seconds), so an hour the Mac slept through is reminded
+/// about once it wakes, and the next hour on the hour.
+final class ClaudeWeekEndReminder {
+    private static let firstHour = 9
+    /// With less of the week left than this (in percent) there's nothing worth using up.
+    private static let minimumLeft = 1.0
+    /// The start of the hour last reminded about, so a relaunch doesn't remind twice in an hour.
+    private static let lastHourKey = "claudeWeekEndReminderHour"
+
+    /// The reminder kept in the Alerts tab during a Focus, replaced by the next one.
+    private var keptNotificationID: UUID?
+
+    func check(_ weekly: ClaudeRateLimit?, at now: Date) {
+        let calendar = Calendar.current
+        guard let weekly, let resetsAt = weekly.resetsAt, now < resetsAt,
+              100 - weekly.usedPercentage >= Self.minimumLeft,
+              let start = Self.firstReminder(before: resetsAt, calendar: calendar), start <= now,
+              let hour = calendar.dateInterval(of: .hour, for: now)?.start,
+              UserDefaults.standard.double(forKey: Self.lastHourKey) != hour.timeIntervalSince1970 else { return }
+        UserDefaults.standard.set(hour.timeIntervalSince1970, forKey: Self.lastHourKey)
+        remind(weekly, resetsAt: resetsAt, calendar: calendar)
+    }
+
+    /// 9:00 on the day the week resets, or on the day before when it resets earlier than that.
+    static func firstReminder(before resetsAt: Date, calendar: Calendar) -> Date? {
+        guard let sameDay = calendar.date(bySettingHour: firstHour, minute: 0, second: 0, of: resetsAt) else { return nil }
+        return sameDay < resetsAt ? sameDay : calendar.date(byAdding: .day, value: -1, to: sameDay)
+    }
+
+    private func remind(_ weekly: ClaudeRateLimit, resetsAt: Date, calendar: Calendar) {
+        let time = resetsAt.formatted(.dateTime.hour().minute())
+        let when = calendar.isDateInToday(resetsAt) ? "at \(time)" : "tomorrow at \(time)"
+        let left = Int((weekly.remainingFraction * 100).rounded())
+        let notification = AppNotification(
+            type: .claude,
+            title: "Weekly limit resets \(when)",
+            body: "\(left)% left · use it up before then",
+            appName: "Claude",
+            progress: weekly.remainingFraction,
+            symbol: "hourglass"
+        )
+
+        let notificationManager = NotificationManager.shared
+        if let keptNotificationID {
+            notificationManager.dismiss(id: keptNotificationID)
+        }
+        // During a Focus there's no banner, so the reminder waits in the Alerts tab.
+        let keepInFeed = FocusStatus.isActive
+        keptNotificationID = keepInFeed ? notification.id : nil
+        notificationManager.postActivity(notification, keepInFeed: keepInFeed)
     }
 }
 
