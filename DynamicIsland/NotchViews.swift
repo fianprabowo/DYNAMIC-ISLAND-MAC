@@ -783,10 +783,25 @@ private struct NotchExpandedView: View {
             .background(layout.selectedTab == tab ? Color.white.opacity(0.15) : Color.clear)
             .clipShape(Capsule())
             .contentShape(Capsule())
+            .overlay(alignment: .topTrailing) {
+                if tab == .poke && hasUnreadPokes && layout.selectedTab != .poke {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 6, height: 6)
+                        .offset(x: -3, y: 2)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hasUnreadPokes)
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help(tab.rawValue)
+        .help(tab == .poke && hasUnreadPokes ? "Poke · new pokes" : tab.rawValue)
+    }
+
+    /// A friend's poke not read yet: pokes wait in the feed until the Poke tab shows them.
+    private var hasUnreadPokes: Bool {
+        notificationManager.notifications.contains { $0.type == .poke }
     }
 
 }
