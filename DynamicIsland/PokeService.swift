@@ -121,8 +121,11 @@ class PokeService: ObservableObject {
     /// The friend being poked from the Poke tab, until Supabase answers.
     @Published private(set) var justPoked: UUID?
     private var justPokedSending: UUID?
-    /// The friend picked in the Poke tab; nil picks the first one.
-    @Published var selectedFriendID: UUID?
+    /// The friend picked in the Poke tab; nil picks the first one. Kept across launches, since the
+    /// Poke shortcut pokes this friend.
+    @Published var selectedFriendID: UUID? = UserDefaults.standard.string(forKey: PokeService.selectedFriendKey).flatMap(UUID.init) {
+        didSet { UserDefaults.standard.set(selectedFriendID?.uuidString, forKey: Self.selectedFriendKey) }
+    }
     /// The pokes between you and each friend whose chat was opened, newest first.
     @Published private(set) var history: [UUID: [Poke]] = [:]
     /// How many pokes a chat keeps; an older one makes way for a newer one.
@@ -241,6 +244,7 @@ class PokeService: ObservableObject {
     private static let urlKey = "pokeProjectURL"
     private static let keyKey = "pokeAnonKey"
     private static let lastPokeKey = "pokeLastID"
+    private static let selectedFriendKey = "pokeSelectedFriend"
     private static let sessionDirectory = URL.applicationSupportDirectory
         .appending(path: Bundle.main.bundleIdentifier ?? "DynamicIsland", directoryHint: .isDirectory)
         .appending(path: "Poke", directoryHint: .isDirectory)
@@ -646,6 +650,18 @@ class PokeService: ObservableObject {
     /// Pokes a friend. From a banner's Poke Back the notch confirms it once sent; the Poke tab marks
     /// the friend from the click until Supabase answers, and shows an error if it didn't go through.
     /// With `image` (a JPEG from `PokeImage`), the picture is uploaded first.
+    /// The Poke shortcut (⌃⌥P): pokes the friend picked last in the Poke tab (or the first one)
+    /// right away, without opening the notch; the notch confirms it, or says why it couldn't.
+    func pokePickedFriend() {
+        let friend = selectedFriendID.flatMap { id in friends.first { $0.id == id } } ?? friends.first
+        guard state == .ready, let friend else {
+            let reason = state == .ready ? "Add a friend in the Poke tab first" : "Poke isn't connected; open the Poke tab"
+            notificationManager.postActivity(AppNotification(type: .poke, title: "Couldn't poke", body: reason))
+            return
+        }
+        poke(friend.id, name: friend.name, confirmOnNotch: true)
+    }
+
     func poke(_ friendID: UUID, name: String, message: String = "", image: Data? = nil, confirmOnNotch: Bool = false) {
         guard let client, let userID = profile?.id else { return }
         let message = Self.limited(message.trimmingCharacters(in: .whitespacesAndNewlines), to: 100)

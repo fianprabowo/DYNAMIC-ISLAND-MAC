@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 import Combine
+import Carbon.HIToolbox
 
 @main
 struct DynamicIslandApp: App {
@@ -39,12 +40,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let todoService = TodoService.shared
     let meetController = MeetController()
     private var cancellables: Set<AnyCancellable> = []
+    private var quickPokeHotKey: GlobalHotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         themeManager.loadPreference()
         enableLaunchAtLoginOnFirstRun()
         shareMeetingsWithFriends()
+        // ⌃⌥P from any app pokes the friend picked last, without opening the notch.
+        quickPokeHotKey = GlobalHotKey(keyCode: kVK_ANSI_P, modifiers: controlKey | optionKey, name: "⌃⌥P (Poke)") { [pokeService] in
+            pokeService.pokePickedFriend()
+        }
     }
 
     /// Friends see a calendar beside your name in Poke while a meeting on your calendar is on or
