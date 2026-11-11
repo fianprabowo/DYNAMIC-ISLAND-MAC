@@ -36,6 +36,26 @@ class PokeService: ObservableObject {
         let name: String
     }
 
+    /// A friend as `list_friends` gives them, with when they were last online (nil before
+    /// supabase/poke.sql added it, or if they haven't been online since).
+    private nonisolated struct ListedFriend: Decodable, Sendable {
+        let id: UUID
+        let name: String
+        let lastSeen: Date?
+
+        enum CodingKeys: String, CodingKey {
+            case id, name
+            case lastSeen = "last_seen"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            lastSeen = Poke.date(in: container, forKey: .lastSeen)
+        }
+    }
+
     nonisolated struct Poke: Identifiable, Decodable, Equatable, Sendable {
         let id: Int
         let senderID: UUID
@@ -77,7 +97,7 @@ class PokeService: ObservableObject {
 
         /// Realtime and the REST API format times differently, like `2026-11-06T08:20:34.027432+00:00`
         /// and `2026-11-06 08:20:34.027432+00`; a poke is shown either way, without the time if unreadable.
-        private static func date(in container: KeyedDecodingContainer<CodingKeys>, forKey key: CodingKeys) -> Date? {
+        static func date<Key: CodingKey>(in container: KeyedDecodingContainer<Key>, forKey key: Key) -> Date? {
             if let date = try? container.decodeIfPresent(Date.self, forKey: key) { return date }
             guard let text = try? container.decodeIfPresent(String.self, forKey: key) else { return nil }
             var normalized = text.replacingOccurrences(of: " ", with: "T")
@@ -137,6 +157,16 @@ class PokeService: ObservableObject {
     @Published private(set) var inMeetingUserIDs: Set<UUID> = []
     /// What friends are listening to, by who's listening.
     @Published private(set) var songs: [UUID: Song] = [:]
+    /// When each friend was last online: the latest of what Supabase says (their app saves it about
+    /// once a minute while connected) and when this Mac saw them leave.
+    @Published private(set) var lastSeenDates: [UUID: Date] = [:]
+    /// When this Mac last told Supabase it's online, which is what friends see once it isn't. Not
+    /// published, since it changes every minute and only shows while this Mac is offline.
+    private(set) var lastOnline: Date?
+    /// Saving it failed, like before supabase/poke.sql added it; logged once, not every minute.
+    private var lastSeenFailed = false
+    /// How often a connected app tells Supabase it's still online.
+    private let lastSeenInterval: TimeInterval = 60
 
     /// A song playing: "Song — Artist", and Spotify's id for it when it plays in Spotify.
     nonisolated struct Song: Equatable, Sendable {
@@ -149,6 +179,12 @@ class PokeService: ObservableObject {
         didSet {
             let online = Set(presences.values.map(\.userID))
             if online != onlineUserIDs {
+                // Whoever just left was online until now; also when this Mac's own connection
+                // dropped, since they were online until then.
+                let now = Date()
+                for id in onlineUserIDs.subtracting(online) {
+                    noteLastSeen(id, at: now)
+                }
                 onlineUserIDs = online
             }
             let inMeeting = Set(presences.values.filter(\.isInMeeting).map(\.userID))
@@ -292,6 +328,8 @@ class PokeService: ObservableObject {
         try? FileManager.default.removeItem(at: Self.sessionDirectory)
         profile = nil
         friends = []
+        lastSeenDates = [:]
+        lastOnline = nil
         history = [:]
         chatClearedUpTo = [:]
         actionError = nil
@@ -415,7 +453,13 @@ class PokeService: ObservableObject {
 
     private func loadFriends() async throws {
         guard let client else { return }
-        let friends: [Friend] = try await client.rpc("list_friends").execute().value
+        let listed: [ListedFriend] = try await client.rpc("list_friends").execute().value
+        for friend in listed {
+            if let seen = friend.lastSeen {
+                noteLastSeen(friend.id, at: seen)
+            }
+        }
+        let friends = listed.map { Friend(id: $0.id, name: $0.name) }
         // The same list again isn't drawn again (that would stutter the notch opening).
         if friends != self.friends {
             self.friends = friends
@@ -424,6 +468,40 @@ class PokeService: ObservableObject {
 
     func isOnline(_ friend: Friend) -> Bool {
         onlineUserIDs.contains(friend.id)
+    }
+
+    /// When the friend was last online, if known; only meant for while they're offline.
+    func lastSeen(of friend: Friend) -> Date? {
+        lastSeenDates[friend.id]
+    }
+
+    /// When friends saw this Mac's user online last, for while this Mac isn't connected.
+    var myLastSeen: Date? {
+        let seen = profile.flatMap { lastSeenDates[$0.id] }
+        guard let lastOnline else { return seen }
+        return max(lastOnline, seen ?? lastOnline)
+    }
+
+    /// Keeps the later time, so an older one from Supabase doesn't undo a newer one seen here.
+    private func noteLastSeen(_ id: UUID, at date: Date) {
+        if let known = lastSeenDates[id], known >= date { return }
+        lastSeenDates[id] = date
+    }
+
+    /// Tells Supabase this Mac is online now, so friends see when it was last online once it isn't.
+    /// Only while the online channel is joined, so it matches the green dot friends see.
+    private func sayStillOnline() async {
+        guard let client, state == .ready, presenceChannel?.status == .subscribed else { return }
+        do {
+            try await client.rpc("touch_last_seen").execute()
+            lastOnline = Date()
+            lastSeenFailed = false
+        } catch {
+            if !lastSeenFailed {
+                lastSeenFailed = true
+                log.error("Couldn't save last online (needs the latest supabase/poke.sql): \(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     func isInMeeting(_ friend: Friend) -> Bool {
@@ -764,6 +842,12 @@ class PokeService: ObservableObject {
                 await self?.rejoinOnlineIfDropped()
             }
         })
+        listenTasks.append(Task { [weak self, lastSeenInterval] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(lastSeenInterval))
+                await self?.sayStillOnline()
+            }
+        })
         showOnline(client: client, userID: userID)
     }
 
@@ -784,6 +868,7 @@ class PokeService: ObservableObject {
                     if let state = self?.presenceState(userID: userID) {
                         await channel.track(state: state)
                     }
+                    await self?.sayStillOnline()
                 } else {
                     // Not connected, so who's online isn't known; joining again brings everyone back.
                     self?.presences = [:]

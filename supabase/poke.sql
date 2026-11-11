@@ -164,16 +164,27 @@ language sql security definer set search_path = public as $$
   where recipient_id = auth.uid() and sender_id = friend and seen_at is null;
 $$;
 
-create or replace function public.list_friends()
-returns table (id uuid, name text)
+-- When each person's app was last connected to Poke: friends see "last online" while they're
+-- offline. The app saves it about once a minute while it's connected, so it's at most a minute off.
+alter table public.profiles add column if not exists last_seen timestamptz;
+
+create or replace function public.touch_last_seen() returns void
+language sql security definer set search_path = public as $$
+  update profiles set last_seen = now() where id = auth.uid();
+$$;
+
+-- Friends with when they were last online; dropped first, since an older version didn't return it.
+drop function if exists public.list_friends();
+create function public.list_friends()
+returns table (id uuid, name text, last_seen timestamptz)
 language sql stable security definer set search_path = public as $$
-  select p.id, p.name from friendships f join profiles p on p.id = f.friend_id
+  select p.id, p.name, p.last_seen from friendships f join profiles p on p.id = f.friend_id
   where f.user_id = auth.uid()
   order by p.name;
 $$;
 
-revoke execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends, public.mark_pokes_delivered, public.mark_pokes_seen from public, anon;
-grant execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends, public.mark_pokes_delivered, public.mark_pokes_seen to authenticated;
+revoke execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends, public.mark_pokes_delivered, public.mark_pokes_seen, public.touch_last_seen from public, anon;
+grant execute on function public.set_profile, public.add_friend, public.remove_friend, public.list_friends, public.mark_pokes_delivered, public.mark_pokes_seen, public.touch_last_seen to authenticated;
 
 -- New pokes reach the recipient's notch right away.
 do $$

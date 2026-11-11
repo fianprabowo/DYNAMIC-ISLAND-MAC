@@ -4252,7 +4252,7 @@ private struct PokeFriendsView: View {
                             Circle()
                                 .fill(poke.isListening ? Color.green : Color.gray)
                                 .frame(width: 6, height: 6)
-                                .help(poke.isListening ? "Receiving pokes" : "Connecting…")
+                                .help(poke.isListening ? "Receiving pokes; friends see you online" : "Connecting…")
                             Text(profile.name)
                                 .font(.system(size: 12, weight: .semibold))
                                 .lineLimit(1)
@@ -4269,6 +4269,14 @@ private struct PokeFriendsView: View {
                         if let song = poke.sharedSong {
                             SongLine(song: song.text)
                                 .help("Friends see you're listening to \(song.text)")
+                        }
+                        // While this Mac isn't connected, friends see when you were last online.
+                        if !poke.isListening, let lastSeen = poke.myLastSeen {
+                            LastOnlineText(date: lastSeen)
+                                .font(.system(size: 9))
+                                .foregroundColor(.gray)
+                                .lineLimit(1)
+                                .help("What friends see while you're offline")
                         }
                     }
                 }
@@ -4602,6 +4610,20 @@ private struct PokeChat: View {
         HStack(spacing: 6) {
             Text(friend.name)
                 .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .layoutPriority(1)
+            // Like a messenger: "online", or when they were last online.
+            Group {
+                if poke.isOnline(friend) {
+                    Text("online")
+                        .foregroundColor(.green)
+                } else if let lastSeen = poke.lastSeen(of: friend) {
+                    LastOnlineText(date: lastSeen)
+                        .foregroundColor(.gray)
+                }
+            }
+            .font(.system(size: 9))
+            .lineLimit(1)
             Spacer(minLength: 0)
             if !isEmpty {
                 Button {
@@ -4869,9 +4891,47 @@ private struct MarqueeText: View {
     }
 }
 
+/// When someone was last online: "5m ago" in the friend list, "last online today at 10:32" above
+/// the chat. It moves on every minute.
+private struct LastOnlineText: View {
+    let date: Date
+    var isShort = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            Text(isShort ? Self.short(date, now: context.date) : Self.long(date, now: context.date))
+        }
+    }
+
+    /// "just now", "5m ago", "2h ago", "3d ago", or the day after a week.
+    static func short(_ date: Date, now: Date) -> String {
+        // A Mac's clock a little ahead of Supabase's would otherwise say "-1m ago".
+        let seconds = max(0, now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "just now"
+        case ..<3600: return "\(Int(seconds / 60))m ago"
+        case ..<86_400: return "\(Int(seconds / 3600))h ago"
+        case ..<(7 * 86_400): return "\(Int(seconds / 86_400))d ago"
+        default: return date.formatted(.dateTime.day().month(.abbreviated))
+        }
+    }
+
+    /// "last online just now", "… today at 10:32", "… yesterday at 21:05" or "… 3 Nov at 14:00".
+    static func long(_ date: Date, now: Date) -> String {
+        if now.timeIntervalSince(date) < 60 { return "last online just now" }
+        let calendar = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return "last online today at \(time)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return "last online yesterday at \(time)"
+        }
+        return "last online \(date.formatted(.dateTime.day().month(.abbreviated))) at \(time)"
+    }
+}
+
 /// A friend's name, with a green dot while they're online, a calendar while they're in a meeting
-/// and the song they're listening to, all on one line; clicking picks them to poke. Hovering shows
-/// a button to remove them.
+/// and the song they're listening to, all on one line, or when they were last online while they're
+/// offline; clicking picks them to poke. Hovering shows a button to remove them.
 private struct FriendRow: View {
     @EnvironmentObject var poke: PokeService
     let friend: PokeService.Friend
@@ -4883,12 +4943,13 @@ private struct FriendRow: View {
     var body: some View {
         let _ = AnimationMonitor.shared.body("FriendRow")
         let isOnline = poke.isOnline(friend)
+        let lastSeen = isOnline ? nil : poke.lastSeen(of: friend)
         HStack(spacing: 6) {
             Circle()
                 .fill(isOnline ? Color.green : Color.white.opacity(0.25))
                 .frame(width: 6, height: 6)
                 .animation(.easeInOut(duration: 0.2), value: isOnline)
-                .help(isOnline ? "\(friend.name) is online" : "\(friend.name) is offline")
+                .help(isOnline ? "\(friend.name) is online" : "\(friend.name) is offline" + (lastSeen.map { ", " + LastOnlineText.long($0, now: .now) } ?? ""))
             Text(friend.name)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
                 .lineLimit(1)
@@ -4922,6 +4983,13 @@ private struct FriendRow: View {
                 .buttonStyle(.plain)
                 .pointingHandCursor()
                 .help("Remove \(friend.name)")
+            } else if let lastSeen {
+                LastOnlineText(date: lastSeen, isShort: true)
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundColor(.gray)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .transition(.opacity)
             }
         }
         .padding(.horizontal, 8)
