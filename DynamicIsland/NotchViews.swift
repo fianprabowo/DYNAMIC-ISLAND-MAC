@@ -426,7 +426,7 @@ private struct NotchBannerView: View {
 
     private func performAction() {
         if let friendID = notification.pokeSenderID {
-            PokeService.shared.poke(friendID, name: senderName, confirmOnNotch: !showsPokeTab)
+            PokeService.shared.poke(friendID, name: senderName, showsErrorOnNotch: !showsPokeTab)
         } else {
             notification.open()
         }
@@ -445,7 +445,7 @@ private struct NotchBannerView: View {
 
     private func sendReply() {
         guard let friendID = notification.pokeSenderID else { return }
-        PokeService.shared.poke(friendID, name: senderName, message: reply, confirmOnNotch: !showsPokeTab)
+        PokeService.shared.poke(friendID, name: senderName, message: reply, showsErrorOnNotch: !showsPokeTab)
         notificationManager.dismissBanner()
     }
 
