@@ -1,0 +1,25 @@
+README.md
+  s_8d4b63dc56ae38::t_602010919c7df2 32
+DynamicIsland/GlobalHotKey.swift
+  s_8d4b63dc56ae38::t_e083c25664e913 1-58
+DynamicIsland/MyApp.swift
+  s_8d4b63dc56ae38::t_099e83b6780f11 5,43,50-53
+DynamicIsland/PokeService.swift
+  s_8d4b63dc56ae38::t_1e5ecd9839c682 124-128,247,653-664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.11",
+  "base_commit_sha": "8c8395ce059094984efcbb9bcb6e1d906ed86da7",
+  "prompts": {},
+  "sessions": {
+    "s_8d4b63dc56ae38": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e007752f-f59f-43f7-8009-9d3757d57f57",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Alfian Prabowo <103156797+fianprabowo@users.noreply.github.com>"
+    }
+  }
+}
