@@ -444,7 +444,7 @@ struct LebaranBackdrop: View {
 /// A trip through space, flying forward as seen from the cockpit, to the planets one by one:
 /// Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune and Pluto, then around again.
 /// Each leg starts with a jump to hyperspace (everything speeds up, the stars stretch into lines,
-/// the view lights up); then the next planet shows far ahead with its name and grows as the ship
+/// the view lights up); then the next planet shows far ahead and grows as the ship
 /// flies at it, until it slides past. Meanwhile the stars come out of the distance and streak
 /// past, nebulas glow far off, a rock or two tumbles at the window, and on each leg one visitor
 /// comes by across from the planet (an astronaut waving, a rocket overtaking, a satellite or a
@@ -642,8 +642,6 @@ struct SpaceBackdrop: View {
     private enum Planet: Int, CaseIterable {
         case mercury, venus, earth, mars, jupiter, saturn, uranus, neptune, pluto
 
-        var name: String { String(describing: self).uppercased() }
-
         /// How big it looks beside the others: not to scale, or Pluto would be a dot.
         var scale: Double {
             switch self {
@@ -677,8 +675,8 @@ struct SpaceBackdrop: View {
         var hasAtmosphere: Bool { [.venus, .earth, .uranus, .neptune].contains(self) }
     }
 
-    /// One planet a leg (`warpPeriod`): after the jump to hyperspace it's far ahead, a dot with its
-    /// name under it, and grows as the ship flies toward it, faster and faster, until it slides
+    /// One planet a leg (`warpPeriod`): after the jump to hyperspace it's far ahead, a dot, and
+    /// grows as the ship flies toward it, faster and faster, until it slides
     /// past beside the window, like in the films. The next jump then heads for the next one.
     private func drawJourney(in canvas: inout GraphicsContext, size: CGSize, time: Double) {
         let leg = (time / Self.warpPeriod).rounded(.down)
@@ -699,15 +697,6 @@ struct SpaceBackdrop: View {
             // Behind the tab's content, so not quite at full strength.
             layer.opacity = 0.9 * min(1, progress / 0.06)
             drawPlanet(planet, in: &layer, center: center, radius: radius, time: time)
-        }
-        // Its name while it's still far, like a title in a film.
-        if progress < 0.55 {
-            let opacity = min(1, progress / 0.08) * min(1, (0.55 - progress) / 0.12) * 0.6
-            canvas.draw(Text(planet.name)
-                            .font(.system(size: 8, weight: .semibold))
-                            .tracking(2.5)
-                            .foregroundColor(.white.opacity(opacity)),
-                        at: CGPoint(x: center.x, y: center.y + radius + 9))
         }
     }
 
