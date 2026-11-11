@@ -276,6 +276,10 @@ struct NotchEyes: View {
                 .frame(width: 15, height: 5.5)
                 .rotationEffect(.degrees(tilt), anchor: .bottom)
                 .offset(x: gaze * 0.8, y: -6.5 + lift)
+        case .space:
+            AstronautHelmet()
+                .frame(width: 27, height: 31)
+                .offset(y: -2.5 + lift * 0.5)
         case .christmas:
             EmptyView()
         }
@@ -869,5 +873,46 @@ struct PokeHandEntrance: ViewModifier {
                     hasArrived = true
                 }
             }
+    }
+}
+
+/// In Space the face wears an astronaut's glass helmet: a white rim, a shine on the glass, and
+/// an antenna on top whose light blinks.
+private struct AstronautHelmet: View {
+    @State private var isLit = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let size = proxy.size.width
+            ZStack(alignment: .top) {
+                // The antenna and its light.
+                Capsule()
+                    .fill(Color(white: 0.8))
+                    .frame(width: 1, height: 5)
+                    .offset(x: size * 0.18, y: 0)
+                Circle()
+                    .fill(Color(red: 1, green: 0.3, blue: 0.3).opacity(isLit ? 1 : 0.3))
+                    .frame(width: 2.6, height: 2.6)
+                    .shadow(color: .red.opacity(isLit ? 0.9 : 0), radius: 2)
+                    .offset(x: size * 0.18, y: -1.5)
+                ZStack {
+                    // The glass, a little tinted.
+                    Circle()
+                        .fill(Color(red: 0.6, green: 0.8, blue: 1).opacity(0.1))
+                    Circle()
+                        .stroke(Color(white: 0.9), lineWidth: 1.6)
+                    // The shine on the upper left of the glass.
+                    Circle()
+                        .trim(from: 0.55, to: 0.72)
+                        .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                        .padding(3)
+                }
+                .frame(width: size, height: size)
+                .offset(y: 4)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { isLit = true }
+        }
     }
 }
