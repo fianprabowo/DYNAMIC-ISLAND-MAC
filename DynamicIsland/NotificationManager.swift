@@ -33,7 +33,14 @@ struct AppNotification: Identifiable, Codable {
 enum NotificationType: String, CaseIterable, Codable {
     case system, message, warning, reminder, network, app
     /// The island's own live activities (see `NotificationManager.postActivity`).
-    case claude, meeting, power, audio, timer, poke, vpn, todo
+    case claude, meeting, power, audio, timer, poke, vpn
+
+    /// A type this version doesn't have, like a due todo's from the removed Todo tab, loads as a
+    /// reminder; otherwise one such alert would keep all the saved ones from loading.
+    init(from decoder: Decoder) throws {
+        let rawValue = try decoder.singleValueContainer().decode(String.self)
+        self = NotificationType(rawValue: rawValue) ?? .reminder
+    }
 
     var icon: String {
         switch self {
@@ -50,7 +57,6 @@ enum NotificationType: String, CaseIterable, Codable {
         case .timer: return "timer"
         case .poke: return "hand.point.right.fill"
         case .vpn: return "lock.shield.fill"
-        case .todo: return "checklist"
         }
     }
 

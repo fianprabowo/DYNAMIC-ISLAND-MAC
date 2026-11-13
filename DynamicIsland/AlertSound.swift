@@ -1,9 +1,9 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// A sound the island plays for something that arrives, picked in Settings: a poke, or a todo
-/// whose time has come. One of macOS's alert sounds, or a sound of your own. Your own sounds live
-/// in ~/Library/Sounds, on this Mac only, where macOS finds them by name.
+/// A sound the island plays for something that arrives, picked in Settings: a poke. One of
+/// macOS's alert sounds, or a sound of your own. Your own sounds live in ~/Library/Sounds, on this
+/// Mac only, where macOS finds them by name.
 struct AlertSound {
     /// Where the pick is kept in UserDefaults (and `@AppStorage`).
     let key: String
@@ -16,9 +16,7 @@ struct AlertSound {
 
     static let poke = AlertSound(key: "pokeSound", defaultName: "Ping",
                                  menuTitle: "Poke Sound", chooseTitle: "Choose a Poke Sound")
-    static let todo = AlertSound(key: "todoSound", defaultName: "Glass",
-                                 menuTitle: "Todo Sound", chooseTitle: "Choose a Todo Sound")
-    private static let all = [poke, todo]
+    private static let all = [poke]
 
     private static let audioExtensions: Set<String> = ["aiff", "aif", "caf", "wav", "mp3", "m4a", "m4r"]
     private static let systemFolder = URL(fileURLWithPath: "/System/Library/Sounds")

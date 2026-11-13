@@ -37,7 +37,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let timerManager = TimerManager(notificationManager: .shared)
     let pokeService = PokeService.shared
     let vpnManager = VPNManager.shared
-    let todoService = TodoService.shared
     let meetController = MeetController()
     private var cancellables: Set<AnyCancellable> = []
     private var quickPokeHotKey: GlobalHotKey?
@@ -123,7 +122,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     .environmentObject(timerManager)
                     .environmentObject(pokeService)
                     .environmentObject(vpnManager)
-                    .environmentObject(todoService)
                     .environmentObject(meetController)
             )
         )
@@ -601,6 +599,5 @@ struct SettingsView: View {
         .environmentObject(TimerManager(notificationManager: .shared))
         .environmentObject(PokeService.shared)
         .environmentObject(VPNManager.shared)
-        .environmentObject(TodoService.shared)
         .environmentObject(MeetController())
 }
